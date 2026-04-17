@@ -145,6 +145,29 @@ export function setBandField(
 	broadcastDirty();
 }
 
+// Append a band to the active slot. Caller is responsible for deciding the
+// new band's shape (freq / gain / q / type / enabled / hardware-slot index).
+// History snapshots happen at the caller level so undo/redo captures the
+// length change as part of the user's action boundary.
+export function addBand(band: Band) {
+	state.slots[state.activeSlot].eq.push(band);
+	dirty[state.activeSlot] = true;
+	broadcastDirty();
+}
+
+// Remove a band from the active slot by its position in the array (NOT by
+// hardware slot `band.index`). Caller supplies the resolved array position
+// so this function doesn't have to know how the UI sorts. Returns the
+// removed band for convenience (e.g. "undo-delete" copy).
+export function removeBandAt(arrayIndex: number): Band | null {
+	const eq = state.slots[state.activeSlot].eq;
+	if (arrayIndex < 0 || arrayIndex >= eq.length) return null;
+	const [removed] = eq.splice(arrayIndex, 1);
+	dirty[state.activeSlot] = true;
+	broadcastDirty();
+	return removed;
+}
+
 // A/B slot accessors -------------------------------------------------
 
 export function getActiveSlot(): SlotName {

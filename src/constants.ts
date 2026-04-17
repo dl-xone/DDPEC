@@ -4,6 +4,14 @@
 export const PACKET_SIZE = 63;
 export const NUM_BANDS = 8;
 
+// Lab-tool mode (no device connected) soft cap for band count. Prevents
+// the UI from growing unbounded if a user mashes the "+ Add band" button.
+// When connected, the device's `maxFilters` overrides this.
+export const LAB_MODE_MAX_BANDS = 20;
+// Minimum band count the remove button respects. The user can't delete the
+// last band — an empty EQ is a surprising state and uninteresting to preview.
+export const MIN_BANDS = 1;
+
 // Shared across preview and protocol encoders so the visualizer matches
 // what the DSP actually computes. All supported DACs run at 96 kHz.
 export const SAMPLE_RATE = 96000;

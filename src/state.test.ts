@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { Band } from "./main.ts";
 import {
+	addBand,
 	defaultEqState,
 	getActiveSlot,
 	getEqState,
 	getGlobalGainState,
 	getInactiveEq,
 	getInactiveGain,
+	removeBandAt,
 	resetSlots,
 	setActiveSlot,
 	setBandField,
@@ -93,5 +96,36 @@ describe("state A/B slots", () => {
 
 		expect(getEqState()[0].gain).toBe(9);
 		expect(getInactiveEq()[0].gain).toBe(-3);
+	});
+
+	it("addBand appends to the active slot only", () => {
+		const startLen = getEqState().length;
+		const newBand: Band = {
+			index: 99,
+			freq: 1234,
+			gain: 2,
+			q: 1.2,
+			type: "PK",
+			enabled: true,
+		};
+		addBand(newBand);
+		expect(getEqState()).toHaveLength(startLen + 1);
+		expect(getEqState()[startLen].freq).toBe(1234);
+
+		// Inactive slot untouched.
+		setActiveSlot("B");
+		expect(getEqState()).toHaveLength(startLen);
+	});
+
+	it("removeBandAt removes the band at the given array position", () => {
+		const before = getEqState().length;
+		const removed = removeBandAt(0);
+		expect(removed).not.toBeNull();
+		expect(getEqState()).toHaveLength(before - 1);
+	});
+
+	it("removeBandAt returns null for out-of-range indices", () => {
+		expect(removeBandAt(-1)).toBeNull();
+		expect(removeBandAt(999)).toBeNull();
 	});
 });

@@ -3,6 +3,10 @@
 		<canvas id="eqCanvas" class="w-full h-full cursor-crosshair block"></canvas>
 	</div>
 
+	<!-- Add/remove band controls. peq.ts renderPEQ fills this in when the
+	     caller wires `onAddBand` / `onRemoveBand`. Hidden otherwise. -->
+	<div id="bandEditorHeader" class="flex items-center justify-end gap-2 px-4 pt-2 pb-1"></div>
+
 	<div id="bandEditor" class="px-4 py-2 overflow-x-auto">
 		<div id="bandTable" class="min-w-max"></div>
 	</div>

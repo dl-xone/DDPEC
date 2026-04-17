@@ -1,4 +1,4 @@
-import { DEFAULT_FREQS } from "./constants.ts";
+import { DEFAULT_FREQS, LAB_MODE_MAX_BANDS, MIN_BANDS } from "./constants.ts";
 import { allVendorFilters, pickDeviceConfig } from "./deviceConfig.ts";
 import {
 	flashToFlash,
@@ -66,6 +66,7 @@ import {
 import type { Band, EQ } from "./main.ts";
 import { renderPEQ, resizeCanvas } from "./peq.ts";
 import {
+	addBand,
 	defaultEqState,
 	getActiveConfig,
 	getActiveSlot,
@@ -77,6 +78,7 @@ import {
 	isDirty,
 	isEqEnabled,
 	markSynced,
+	removeBandAt,
 	resetSlots,
 	setActiveConfig,
 	setActiveSlot,
@@ -427,9 +429,102 @@ export function renderUI(eqState: EQ) {
 		(index, key, value) => {
 			updateState(index, key, value);
 		},
-		{ inactiveBands: getInactiveEq() },
+		{
+			inactiveBands: getInactiveEq(),
+			onAddBand: addBandHandler,
+			onRemoveBand: removeBandHandler,
+			getBandCountCap: getBandCountCap,
+		},
 	);
 	updateSlotUI();
+}
+
+// Band-count cap. Connected → device's maxFilters (hardware floor for
+// ring-buffer slots). Disconnected (lab mode) → a soft cap so the UI
+// doesn't grow unbounded.
+export function getBandCountCap(): { min: number; max: number } {
+	const cfg = getActiveConfig();
+	return {
+		min: MIN_BANDS,
+		max: cfg?.maxFilters ?? LAB_MODE_MAX_BANDS,
+	};
+}
+
+// Append a new band to the active slot. Uses the lowest free hardware slot
+// index (important for connected devices where band.index ∈ [0, maxFilters))
+// so removing slot 3 and re-adding reuses slot 3 rather than assigning slot
+// N+1. History is captured via snapshot() so undo rolls back the addition.
+export function addBandHandler() {
+	const cap = getBandCountCap();
+	const eq = getEqState();
+	if (eq.length >= cap.max) {
+		toast(`Max ${cap.max} bands for this device`);
+		return;
+	}
+
+	const freqs = eq.map((b) => b.freq);
+	const maxFreq = freqs.length > 0 ? Math.max(...freqs) : 0;
+	// Place the new band between the current highest freq and 20 kHz so it
+	// lands in empty spectrum. If the top band is already near the ceiling,
+	// fall back to 1 kHz — a reasonable default the user can drag anywhere.
+	const newFreq =
+		maxFreq < 10000 ? Math.round((maxFreq + 20000) / 2) : 1000;
+
+	// Pick the lowest unused hardware slot index so deletions free up slots
+	// for reuse (critical for connected devices that cap at maxFilters).
+	const used = new Set(eq.map((b) => b.index));
+	let nextIdx = 0;
+	while (used.has(nextIdx)) nextIdx++;
+
+	const newBand: Band = {
+		index: nextIdx,
+		freq: newFreq,
+		gain: 0,
+		q: 0.75,
+		type: "PK",
+		enabled: true,
+	};
+
+	snapshot();
+	addBand(newBand);
+	renderUI(getEqState());
+	updateHistoryButtons();
+	const cfg = getActiveConfig();
+	if (cfg) persistProfile(cfg.key);
+	log(`Added band ${nextIdx + 1} at ${newFreq} Hz.`);
+}
+
+// Remove the currently-selected band. No explicit selection tracked here
+// (peq.ts owns `selectedIndex` as a display concern), so we fall back to
+// the highest-frequency band — the most common "I want one less band"
+// action. History captures the length change.
+export function removeBandHandler() {
+	const cap = getBandCountCap();
+	const eq = getEqState();
+	if (eq.length <= cap.min) {
+		toast(`Min ${cap.min} band${cap.min === 1 ? "" : "s"} required`);
+		return;
+	}
+
+	// Find the highest-freq band's array position.
+	let targetArrayIdx = 0;
+	let maxFreq = -Infinity;
+	for (let i = 0; i < eq.length; i++) {
+		if (eq[i].freq > maxFreq) {
+			maxFreq = eq[i].freq;
+			targetArrayIdx = i;
+		}
+	}
+
+	snapshot();
+	const removed = removeBandAt(targetArrayIdx);
+	renderUI(getEqState());
+	updateHistoryButtons();
+	const cfg = getActiveConfig();
+	if (cfg) persistProfile(cfg.key);
+	if (removed) {
+		log(`Removed band at ${Math.round(removed.freq)} Hz.`);
+	}
 }
 
 // Wave 4 — paint the A/B toggle state. Light-weight: active tab just

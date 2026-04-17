@@ -35,18 +35,35 @@ function themeColor(name: string, fallback: string): string {
  */
 let localBands: Band[] = [];
 let inactiveBands: Band[] | null = null;
+// selectedIndex tracks a band by its *hardware slot* (band.index) so that
+// re-sorting the display after a frequency edit keeps the same band
+// highlighted, rather than jumping to whatever band is now at the old
+// display position.
 let selectedIndex: number | null = null;
 let draggingIndex: number | null = null;
 let onUpdateCallback:
 	| ((index: number, key: string, value: number | string | boolean) => void)
 	| null = null;
+// Optional add/remove handlers — supplied by renderPEQ. When undefined the
+// header's +/- buttons hide so the band-count UI can stay off for tests.
+let onAddBandCallback: (() => void) | null = null;
+let onRemoveBandCallback: (() => void) | null = null;
+let getBandCountCapCallback: (() => { min: number; max: number }) | null = null;
 
 // DOM refs
 let canvas: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
 let bandTable: HTMLElement | null = null;
+let bandCountControls: {
+	addBtn: HTMLButtonElement;
+	removeBtn: HTMLButtonElement;
+	countLabel: HTMLElement;
+} | null = null;
 
-// Cached per-band input refs, for O(1) updates without DOM rebuilds.
+// Cached per-band input refs. Indexed by the band's position in the sorted
+// display list — NOT by `band.index` (hardware slot). Each ref closes over
+// the originalIndex (position in the unsorted eqState array) so the update
+// callback still targets the correct underlying state entry.
 const cellRefs: Array<{
 	type: HTMLSelectElement;
 	gain: HTMLInputElement;
@@ -55,7 +72,33 @@ const cellRefs: Array<{
 	enable: HTMLInputElement;
 	header: HTMLElement;
 	typeLabel: HTMLElement;
+	originalIndex: number;
 }> = [];
+
+// Fingerprint of the current sort — a comma-joined list of hardware indices
+// in ascending-frequency order. Changes when a frequency edit moves a band
+// past a neighbour; we rebuild the table DOM on change so labels stay in
+// ascending order. Stored separately from cellRefs.length so a pure
+// length-change rebuild doesn't depend on sort state.
+let lastSortFingerprint = "";
+
+type SortedView = Array<{ band: Band; originalIndex: number }>;
+
+// Produce a stable ascending-frequency ordering with tie-break on original
+// index so a spurious re-sort doesn't scramble equal-freq bands.
+function sortedView(bands: Band[]): SortedView {
+	return bands
+		.map((band, originalIndex) => ({ band, originalIndex }))
+		.sort(
+			(a, b) =>
+				a.band.freq - b.band.freq ||
+				a.originalIndex - b.originalIndex,
+		);
+}
+
+function sortFingerprint(view: SortedView): string {
+	return view.map((v) => v.originalIndex).join(",");
+}
 
 /**
  * MATH & DSP (delegates to shared biquad module)
@@ -346,7 +389,10 @@ function drawHandles(
 	const surfaceDisabled = themeColor("--color-surface-3", "#2a2a2f");
 	const text3 = themeColor("--color-text-3", "#5a5a5f");
 
-	localBands.forEach((band) => {
+	// Handle numbers follow the sorted display order so they match the
+	// tabular editor's "Band N" labels. Lowest-freq band is #1.
+	const view = sortedView(localBands);
+	view.forEach(({ band }, sortedPos) => {
 		const x = freqToX(band.freq, width);
 		const y = gainToY(band.gain, height);
 		const isSelected = band.index === selectedIndex;
@@ -374,7 +420,7 @@ function drawHandles(
 		c.font = "11px ui-monospace, monospace";
 		c.textAlign = "center";
 		c.textBaseline = "middle";
-		c.fillText(String(band.index + 1), x, y + 0.5);
+		c.fillText(String(sortedPos + 1), x, y + 0.5);
 	});
 	c.textBaseline = "alphabetic";
 }
@@ -457,22 +503,31 @@ function draw() {
 
 /**
  * TABULAR EDITOR — replaces the legacy band-list + edit-form sidebar.
+ *
+ * Iterates a frequency-ascending sorted view of `bands`, but keeps a handle
+ * back to each band's `originalIndex` (position in the unsorted eqState
+ * array) so update callbacks mutate the right slot. The hardware slot ID
+ * (`band.index`) is NOT touched — it's load-bearing for sync packets.
  */
 function buildBandTable(table: HTMLElement, bands: Band[]) {
 	table.replaceChildren();
 	cellRefs.length = 0;
 
-	const columns = `grid-template-columns: 44px repeat(${bands.length}, minmax(68px, 1fr));`;
+	const view = sortedView(bands);
+	lastSortFingerprint = sortFingerprint(view);
+
+	const columns = `grid-template-columns: 44px repeat(${view.length}, minmax(68px, 1fr));`;
 	const grid = document.createElement("div");
 	grid.className = "grid gap-x-1.5 gap-y-0.5 items-center";
 	grid.setAttribute("style", columns);
 
 	// Header row — band number, type label, and an enable-power toggle.
 	grid.appendChild(rowLabel(""));
-	bands.forEach((band, i) => {
+	view.forEach(({ band, originalIndex }, sortedPos) => {
 		const h = document.createElement("div");
 		h.className = "flex flex-col items-center gap-0 py-0.5 cursor-pointer";
-		h.dataset.band = String(i);
+		h.dataset.band = String(sortedPos);
+		h.dataset.originalIndex = String(originalIndex);
 
 		const typeLabel = document.createElement("div");
 		typeLabel.className = "text-[9px] uppercase tracking-wider text-text-3 font-mono";
@@ -483,7 +538,7 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 
 		const bandNum = document.createElement("span");
 		bandNum.className = "text-[10px] font-mono text-text-2";
-		bandNum.textContent = `Band ${i + 1}`;
+		bandNum.textContent = `Band ${sortedPos + 1}`;
 
 		const enable = document.createElement("input");
 		enable.type = "checkbox";
@@ -492,18 +547,18 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 		enable.title = "Enable / disable this band";
 		enable.addEventListener("change", (e) => {
 			e.stopPropagation();
-			onUpdateCallback?.(i, "enabled", enable.checked);
+			onUpdateCallback?.(originalIndex, "enabled", enable.checked);
 			draw();
 		});
 
 		bandRow.append(bandNum, enable);
 		h.append(typeLabel, bandRow);
 		h.addEventListener("click", (e) => {
-			if ((e.target as HTMLElement).tagName !== "INPUT") selectBand(i);
+			if ((e.target as HTMLElement).tagName !== "INPUT") selectBand(band.index);
 		});
 		grid.appendChild(h);
 
-		cellRefs[i] = {
+		cellRefs[sortedPos] = {
 			type: null as unknown as HTMLSelectElement,
 			gain: null as unknown as HTMLInputElement,
 			freq: null as unknown as HTMLInputElement,
@@ -511,12 +566,13 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 			enable,
 			header: h,
 			typeLabel,
+			originalIndex,
 		};
 	});
 
 	// TYPE row
 	grid.appendChild(rowLabel("Type"));
-	bands.forEach((band, i) => {
+	view.forEach(({ band, originalIndex }, sortedPos) => {
 		const sel = document.createElement("select");
 		sel.className =
 			"bg-transparent rounded text-[10px] font-mono text-text-1 px-1 py-0.5 border border-transparent hover:border-border focus:outline-none focus:border-accent";
@@ -528,60 +584,78 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 		}
 		sel.value = band.type;
 		sel.addEventListener("change", () => {
-			onUpdateCallback?.(i, "type", sel.value);
-			if (cellRefs[i]) {
-				cellRefs[i].typeLabel.textContent =
+			onUpdateCallback?.(originalIndex, "type", sel.value);
+			if (cellRefs[sortedPos]) {
+				cellRefs[sortedPos].typeLabel.textContent =
 					BAND_TYPE_LABELS[sel.value] ?? "Peaking";
 			}
 			draw();
 		});
 		grid.appendChild(sel);
-		cellRefs[i].type = sel;
+		cellRefs[sortedPos].type = sel;
 	});
 
 	// GAIN row
 	grid.appendChild(rowLabel("Gain"));
-	bands.forEach((band, i) => {
+	view.forEach(({ band, originalIndex }, sortedPos) => {
 		const inp = numericInput(formatGain(band.gain), -20, 20, 0.1);
 		inp.addEventListener("input", () => {
 			const v = Number(inp.value);
 			if (Number.isFinite(v)) {
-				onUpdateCallback?.(i, "gain", v);
+				onUpdateCallback?.(originalIndex, "gain", v);
 				draw();
 			}
 		});
 		grid.appendChild(inp);
-		cellRefs[i].gain = inp;
+		cellRefs[sortedPos].gain = inp;
 	});
 
-	// FREQ row
+	// FREQ row — edits flow into state on `input`, but we only re-sort the
+	// display on blur (`change`). Re-sorting per keystroke is jarring when
+	// the user is still typing (e.g. typing "500" transiently parses as
+	// "5" → "50" → "500" and the band would hop across the chart each time).
+	// The blur handler's sole job is to force a sort-order rebuild via
+	// renderPEQ's fingerprint check — no state mutation, since `input`
+	// already committed the final value.
 	grid.appendChild(rowLabel("Freq"));
-	bands.forEach((band, i) => {
+	view.forEach(({ band, originalIndex }, sortedPos) => {
 		const inp = numericInput(String(Math.round(band.freq)), 10, 24000, 1);
 		inp.addEventListener("input", () => {
 			const v = Number(inp.value);
 			if (Number.isFinite(v) && v > 0) {
-				onUpdateCallback?.(i, "freq", v);
+				onUpdateCallback?.(originalIndex, "freq", v);
 				draw();
 			}
 		});
+		// On blur: force a table rebuild if the sort has shifted. No state
+		// mutation — `input` already pushed the value. This handler just
+		// unblocks the fingerprint-based rebuild that `input` deliberately
+		// skipped (see renderPEQ's `midInteraction` gate).
+		inp.addEventListener("blur", () => {
+			if (!bandTable) return;
+			const currentFingerprint = sortFingerprint(sortedView(localBands));
+			if (currentFingerprint !== lastSortFingerprint) {
+				buildBandTable(bandTable, localBands);
+			}
+			draw();
+		});
 		grid.appendChild(inp);
-		cellRefs[i].freq = inp;
+		cellRefs[sortedPos].freq = inp;
 	});
 
 	// Q row
 	grid.appendChild(rowLabel("Q"));
-	bands.forEach((band, i) => {
+	view.forEach(({ band, originalIndex }, sortedPos) => {
 		const inp = numericInput(formatQ(band.q), 0.1, 10, 0.01);
 		inp.addEventListener("input", () => {
 			const v = Number(inp.value);
 			if (Number.isFinite(v) && v > 0) {
-				onUpdateCallback?.(i, "q", v);
+				onUpdateCallback?.(originalIndex, "q", v);
 				draw();
 			}
 		});
 		grid.appendChild(inp);
-		cellRefs[i].q = inp;
+		cellRefs[sortedPos].q = inp;
 	});
 
 	table.appendChild(grid);
@@ -620,11 +694,15 @@ function numericInput(
 
 // Push current band values back into the table without rebuilding DOM.
 // Skips the input currently holding focus so typing isn't clobbered.
+//
+// Iterates in sorted-display order. Each cellRef carries the originalIndex
+// of the underlying eqState slot, so looking up `bands[refs.originalIndex]`
+// yields the correct live band regardless of table position.
 function syncBandTable(bands: Band[]) {
 	const focused = document.activeElement;
-	for (let i = 0; i < bands.length; i++) {
+	for (let i = 0; i < cellRefs.length; i++) {
 		const refs = cellRefs[i];
-		const b = bands[i];
+		const b = bands[refs.originalIndex];
 		if (!refs || !b) continue;
 		if (focused !== refs.type && refs.type.value !== b.type) {
 			refs.type.value = b.type;
@@ -634,12 +712,14 @@ function syncBandTable(bands: Band[]) {
 		if (focused !== refs.q) refs.q.value = formatQ(b.q);
 		refs.enable.checked = b.enabled;
 		refs.typeLabel.textContent = BAND_TYPE_LABELS[b.type] ?? "Peaking";
-		refs.header.classList.toggle("text-accent", i === selectedIndex);
+		refs.header.classList.toggle("text-accent", b.index === selectedIndex);
 	}
 }
 
-function selectBand(index: number) {
-	selectedIndex = index;
+// selectedIndex tracks the hardware slot (band.index) so a freq edit that
+// re-sorts the display doesn't drop the highlight.
+function selectBand(hardwareIndex: number) {
+	selectedIndex = hardwareIndex;
 	syncBandTable(localBands);
 	draw();
 }
@@ -649,6 +729,12 @@ function selectBand(index: number) {
  */
 export interface RenderPEQOptions {
 	inactiveBands?: Band[] | null;
+	// Optional add/remove-band wiring. All three must be provided together
+	// for the +/- header controls to appear. The cap callback returns the
+	// current min/max band count (device-connected vs lab-mode differs).
+	onAddBand?: () => void;
+	onRemoveBand?: () => void;
+	getBandCountCap?: () => { min: number; max: number };
 }
 
 export function renderPEQ(
@@ -663,6 +749,9 @@ export function renderPEQ(
 	localBands = bands;
 	onUpdateCallback = updateCallback;
 	inactiveBands = options.inactiveBands ?? null;
+	onAddBandCallback = options.onAddBand ?? null;
+	onRemoveBandCallback = options.onRemoveBand ?? null;
+	getBandCountCapCallback = options.getBandCountCap ?? null;
 
 	if (isFirstRender) {
 		const parsed = new DOMParser().parseFromString(peqTemplate, "text/html");
@@ -672,6 +761,9 @@ export function renderPEQ(
 		ctx = canvas?.getContext("2d") || null;
 		bandTable = container.querySelector("#bandTable");
 
+		const editorBar = container.querySelector<HTMLElement>("#bandEditorHeader");
+		if (editorBar) bandCountControls = buildBandCountControls(editorBar);
+
 		const resizeObserver = new ResizeObserver(() => resizeCanvas());
 		if (canvas?.parentElement) resizeObserver.observe(canvas.parentElement);
 		resizeCanvas();
@@ -680,13 +772,83 @@ export function renderPEQ(
 	}
 
 	if (bandTable) {
-		if (cellRefs.length !== bands.length) {
+		// Rebuild on length change OR on sort order change (a freq edit moved
+		// a band past a neighbour). Otherwise just push current values into
+		// the existing inputs.
+		//
+		// EXCEPT: skip the sort-order rebuild while the user is mid-interaction
+		// (typing in a freq input, or dragging a handle on the canvas). A
+		// rebuild would blow away focus on keystroke, and rebuilding N times
+		// per mousemove during a drag is wasteful. The drag-end and blur
+		// paths both re-render after settle, at which point the fingerprint
+		// check fires cleanly.
+		const currentFingerprint = sortFingerprint(sortedView(bands));
+		const focused = document.activeElement;
+		const freqInputFocused = cellRefs.some(
+			(r) => r?.freq === focused,
+		);
+		const midInteraction = freqInputFocused || draggingIndex !== null;
+		const needsRebuild =
+			cellRefs.length !== bands.length ||
+			(currentFingerprint !== lastSortFingerprint && !midInteraction);
+		if (needsRebuild) {
 			buildBandTable(bandTable, bands);
 		} else {
 			syncBandTable(bands);
 		}
 	}
+	syncBandCountControls();
 	draw();
+}
+
+// Header controls — "+ Add band" / "− Remove" + band count label. Inserted
+// into the static band-editor header slot so existing layout stays intact.
+function buildBandCountControls(host: HTMLElement): {
+	addBtn: HTMLButtonElement;
+	removeBtn: HTMLButtonElement;
+	countLabel: HTMLElement;
+} {
+	host.replaceChildren();
+	host.className =
+		"flex items-center justify-end gap-2 px-4 pt-2 pb-1";
+
+	const countLabel = document.createElement("span");
+	countLabel.className =
+		"text-[10px] font-mono uppercase tracking-wider text-text-3";
+	host.appendChild(countLabel);
+
+	const removeBtn = document.createElement("button");
+	removeBtn.type = "button";
+	removeBtn.className = "btn-outline";
+	removeBtn.textContent = "− Remove";
+	removeBtn.title = "Remove the selected band (or the highest-frequency one)";
+	removeBtn.addEventListener("click", () => onRemoveBandCallback?.());
+
+	const addBtn = document.createElement("button");
+	addBtn.type = "button";
+	addBtn.className = "btn-outline";
+	addBtn.textContent = "+ Add band";
+	addBtn.title = "Append a new band";
+	addBtn.addEventListener("click", () => onAddBandCallback?.());
+
+	host.append(removeBtn, addBtn);
+	return { addBtn, removeBtn, countLabel };
+}
+
+function syncBandCountControls() {
+	if (!bandCountControls) return;
+	const hasAddRemove = !!(onAddBandCallback && onRemoveBandCallback);
+	bandCountControls.addBtn.hidden = !hasAddRemove;
+	bandCountControls.removeBtn.hidden = !hasAddRemove;
+	if (!hasAddRemove) {
+		bandCountControls.countLabel.textContent = "";
+		return;
+	}
+	const cap = getBandCountCapCallback?.() ?? { min: 1, max: 20 };
+	const n = localBands.length;
+	bandCountControls.countLabel.textContent = `${n} / ${cap.max} bands`;
+	bandCountControls.addBtn.disabled = n >= cap.max;
+	bandCountControls.removeBtn.disabled = n <= cap.min;
 }
 
 function wireCanvasInteraction(el: HTMLCanvasElement) {
@@ -700,21 +862,24 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 		const w = (el as any).logicalWidth;
 		const h = (el as any).logicalHeight;
 
-		let closestIdx = -1;
+		// Hit-test returns the *array position* of the closest band. That's
+		// what the drag handler passes to the update callback and into
+		// `localBands[arrayIdx]` below.
+		let closestArrayIdx = -1;
 		let minDst = 1000;
-		localBands.forEach((band) => {
+		localBands.forEach((band, arrayIdx) => {
 			const bx = freqToX(band.freq, w);
 			const by = gainToY(band.gain, h);
 			const dist = Math.sqrt((x - bx) ** 2 + (y - by) ** 2);
 			if (dist < 22 && dist < minDst) {
 				minDst = dist;
-				closestIdx = band.index;
+				closestArrayIdx = arrayIdx;
 			}
 		});
 
-		if (closestIdx !== -1) {
-			draggingIndex = closestIdx;
-			selectBand(closestIdx);
+		if (closestArrayIdx !== -1) {
+			draggingIndex = closestArrayIdx;
+			selectBand(localBands[closestArrayIdx].index);
 		}
 	});
 
@@ -738,13 +903,27 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 	});
 
 	window.addEventListener("mouseup", () => {
+		if (draggingIndex === null) return;
 		draggingIndex = null;
+		// Drag is over — now let the sort-fingerprint check run and rebuild
+		// the table if the dragged band crossed a neighbour. syncBandTable
+		// alone wouldn't catch this since we gate rebuild by `draggingIndex`
+		// during the drag itself.
+		if (bandTable) {
+			const currentFingerprint = sortFingerprint(sortedView(localBands));
+			if (currentFingerprint !== lastSortFingerprint) {
+				buildBandTable(bandTable, localBands);
+			}
+		}
+		draw();
 	});
 }
 
-function handleUpdate(index: number, key: string, value: any) {
-	onUpdateCallback?.(index, key, value);
-	const band = localBands[index];
+// `arrayIdx` is the position in the unsorted eqState array — the same index
+// the update callback expects, since state.setBandField is array-indexed.
+function handleUpdate(arrayIdx: number, key: string, value: any) {
+	onUpdateCallback?.(arrayIdx, key, value);
+	const band = localBands[arrayIdx];
 	if (band) {
 		if (key === "freq") band.freq = Number(value);
 		if (key === "gain") band.gain = Number(value);
