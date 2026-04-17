@@ -1,6 +1,11 @@
 import "./style.css";
 import { flashToFlash, syncToDevice } from "./dsp.ts";
-import { connectToDevice, initState, resetToDefaults } from "./fn.ts";
+import {
+	connectToDevice,
+	initState,
+	onSlotChange,
+	resetToDefaults,
+} from "./fn.ts";
 import { setGlobalGain } from "./helpers.ts";
 import { exportProfile, importProfile } from "./importExport.ts";
 
@@ -46,6 +51,12 @@ btnFlash!.addEventListener("click", async () => flashToFlash());
  */
 const globalSlider = document.getElementById("globalGainSlider");
 globalSlider!.addEventListener("change", async (e) => setGlobalGain(e));
+
+/**
+ * SLOT LOGIC
+ */
+const slotSelect = document.getElementById("slotSelect");
+slotSelect?.addEventListener("change", (e) => onSlotChange(e));
 
 /**
  * IMPORT/EXPORT LOGIC

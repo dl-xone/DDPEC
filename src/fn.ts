@@ -1,10 +1,9 @@
+import { DEFAULT_FREQS } from "./constants.ts";
 import {
-	DEFAULT_FREQS,
-	VID_COMTRUE,
-	VID_FIIO,
-	VID_SAVITECH,
-	VID_SAVITECH_OFFICIAL,
-} from "./constants.ts";
+	allVendorFilters,
+	type DeviceConfig,
+	pickDeviceConfig,
+} from "./deviceConfig.ts";
 import { readDeviceParams, setupListener, syncToDevice } from "./dsp.ts";
 import { enableControls, log, updateGlobalGainUI } from "./helpers.ts";
 import type { Band, EQ } from "./main.ts";
@@ -15,7 +14,9 @@ import { renderPEQ, resizeCanvas } from "./peq.ts";
  */
 let device: HIDDevice | null = null;
 let globalGainState: number = 0;
-let eqState: EQ = defaultEqState();
+let activeConfig: DeviceConfig | null = null;
+let currentSlotId: number = 101;
+let eqState: EQ = defaultEqState(null);
 
 /**
  * INITIALIZATION
@@ -34,6 +35,14 @@ export function setGlobalGain(gain: number) {
 
 export function getDevice() {
 	return device;
+}
+
+export function getActiveConfig(): DeviceConfig | null {
+	return activeConfig;
+}
+
+export function getCurrentSlotId(): number {
+	return currentSlotId;
 }
 
 export function getEqState() {
@@ -64,12 +73,13 @@ export function setGlobalGainState(gainState: number) {
 /**
  * DEFAULT EQ STATE
  */
-export function defaultEqState(): EQ {
-	return DEFAULT_FREQS.map((freq, i) => ({
+export function defaultEqState(cfg: DeviceConfig | null): EQ {
+	const freqs = cfg?.defaultFreqs ?? DEFAULT_FREQS;
+	return freqs.map((freq, i) => ({
 		index: i,
 		freq: freq,
 		gain: 0,
-		q: 0.75, // Default Q
+		q: 0.75,
 		type: "PK",
 		enabled: true,
 	})) as EQ;
@@ -96,21 +106,22 @@ export function renderUI(eqState: EQ) {
 export async function connectToDevice() {
 	try {
 		const devices = await navigator.hid.requestDevice({
-			filters: [
-				{ vendorId: VID_SAVITECH }, // JCally
-				{ vendorId: VID_SAVITECH_OFFICIAL }, // Fosi, iBasso
-				{ vendorId: VID_COMTRUE }, // Moondrop, Tanchjim
-				{ vendorId: VID_FIIO }, // FiiO
-			],
+			filters: allVendorFilters(),
 		});
 		if (devices.length === 0) return;
 
 		device = devices[0];
 		await device.open();
 
+		const cfg = pickDeviceConfig(device);
+		activeConfig = cfg;
+
 		log(
-			`Connected to: ${device.productName} (VID: 0x${device.vendorId.toString(16).toUpperCase()})`,
+			`Connected to: ${device.productName} (VID: 0x${device.vendorId.toString(16).toUpperCase()}, Config: ${cfg.label}, maxFilters=${cfg.maxFilters})`,
 		);
+
+		eqState = defaultEqState(cfg);
+		setGlobalGain(0);
 
 		// Setup UI state
 		const statusBadge = document.getElementById("statusBadge");
@@ -121,13 +132,49 @@ export async function connectToDevice() {
 		const btnConnect = document.getElementById("btnConnect");
 		if (btnConnect) btnConnect.style.display = "none";
 
+		// Configure gain slider bounds
+		const gainSlider = document.getElementById(
+			"globalGainSlider",
+		) as HTMLInputElement;
+		if (gainSlider) {
+			gainSlider.min = cfg.minGain.toString();
+			gainSlider.max = cfg.maxGain.toString();
+		}
+
+		// autoGlobalGain: disable preamp slider
+		if (cfg.autoGlobalGain) {
+			if (gainSlider) gainSlider.disabled = true;
+			const display = document.getElementById("globalGainDisplay");
+			if (display) display.innerText = "AUTO";
+		}
+
+		// Populate slot dropdown
+		const slotSelect = document.getElementById(
+			"slotSelect",
+		) as HTMLSelectElement;
+		if (slotSelect) {
+			slotSelect.innerHTML = "";
+			for (const slot of cfg.slots) {
+				const opt = document.createElement("option");
+				opt.value = slot.id.toString();
+				opt.textContent = slot.name;
+				slotSelect.appendChild(opt);
+			}
+			currentSlotId = cfg.slots[0].id;
+			slotSelect.value = currentSlotId.toString();
+		}
+
 		enableControls(true);
 
-		// For Savitech we can read. For others, we might start with a blank slate or implement reading later.
-		if (
-			device.vendorId === VID_SAVITECH ||
-			device.vendorId === VID_SAVITECH_OFFICIAL
-		) {
+		// Re-lock preamp after enableControls if autoGlobalGain
+		if (cfg.autoGlobalGain && gainSlider) {
+			gainSlider.disabled = true;
+		}
+
+		renderUI(eqState);
+
+		// Pull-from-device for Walkplay protocol
+		if (cfg.protocol === "WALKPLAY") {
 			setupListener(device);
 			await readDeviceParams(device);
 		}
@@ -149,7 +196,7 @@ export async function resetToDefaults() {
 
 	log("Resetting to factory defaults...");
 
-	eqState = defaultEqState();
+	eqState = defaultEqState(activeConfig);
 
 	// Reset Global Gain State
 	setGlobalGain(0);
@@ -185,6 +232,17 @@ export function updateState(
 
 	// Refresh UI to keep consistency
 	renderUI(eqState);
+}
+
+/**
+ * Slot change handler
+ */
+export function onSlotChange(e: Event) {
+	const select = e.target as HTMLSelectElement;
+	currentSlotId = Number.parseInt(select.value, 10);
+	log(
+		`Slot changed to: ${select.selectedOptions[0].textContent} (id=${currentSlotId})`,
+	);
 }
 
 // Expose functions to global window object for inline event handlers

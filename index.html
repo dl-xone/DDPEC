@@ -30,6 +30,13 @@
     <input type="range" id="globalGainSlider" min="-20" max="10" step="1" value="0" class="w-[200px]" disabled>
   </div>
 
+  <div class="flex items-center gap-3">
+    <label class="text-xs text-gray-400">Slot</label>
+    <select id="slotSelect" class="bg-[#2a2a2a] text-gray-200 text-sm rounded px-2 py-1 border border-[#333]" disabled>
+      <option value="">—</option>
+    </select>
+  </div>
+
   <div class="btn-group flex gap-3">
     <button id="btnReset" class="px-4 py-2 rounded font-semibold cursor-pointer transition-all bg-red-700 text-white text-sm hover:bg-red-600 reset" disabled>RESET DEFAULTS</button>
     <button id="btnImport" class="px-4 py-2 rounded font-semibold cursor-pointer transition-all bg-gray-700 text-white text-sm hover:bg-gray-600">Import</button>

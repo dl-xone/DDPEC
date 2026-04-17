@@ -3,14 +3,14 @@ import {
 	CMD_MOON,
 	CMD_SAVI,
 	DEFAULT_FREQS,
-	NUM_BANDS,
 	PACKET_SIZE,
 	REPORT_ID_DEFAULT,
 	REPORT_ID_FIIO,
-	VID_COMTRUE,
-	VID_FIIO,
 } from "./constants.ts";
+import type { Protocol } from "./deviceConfig.ts";
 import {
+	getActiveConfig,
+	getCurrentSlotId,
 	getDevice,
 	getEqState,
 	getGlobalGainState,
@@ -21,12 +21,10 @@ import { delay, log, refreshStripUI } from "./helpers.ts";
 import type { Band } from "./main.ts";
 
 /**
- * DETECT PROTOCOL BASED ON VENDOR ID
+ * DETECT PROTOCOL FROM ACTIVE CONFIG
  */
-function getProtocol(device: HIDDevice) {
-	if (device.vendorId === VID_COMTRUE) return "MOONDROP";
-	if (device.vendorId === VID_FIIO) return "FIIO";
-	return "SAVITECH"; // Default
+function getProtocol(_device: HIDDevice): Protocol {
+	return getActiveConfig()?.protocol ?? "WALKPLAY";
 }
 
 /**
@@ -38,6 +36,9 @@ export async function setDeviceGlobalGain(gain: number) {
 	const device = getDevice();
 	if (!device) return;
 
+	const cfg = getActiveConfig();
+	if (cfg?.autoGlobalGain) return;
+
 	const protocol = getProtocol(device);
 
 	if (protocol === "FIIO") {
@@ -45,7 +46,6 @@ export async function setDeviceGlobalGain(gain: number) {
 	} else if (protocol === "MOONDROP") {
 		await setGlobalGainMoondrop(device, gain);
 	} else {
-		// Savitech Default
 		await sendPacketSavitech(device, [
 			CMD_SAVI.WRITE,
 			CMD_SAVI.GAIN,
@@ -79,8 +79,9 @@ export async function readDeviceParams(device: HIDDevice) {
 	]);
 	await delay(50);
 
+	const maxFilters = getActiveConfig()?.maxFilters ?? DEFAULT_FREQS.length;
 	// Request all bands
-	for (let i = 0; i < NUM_BANDS; i++) {
+	for (let i = 0; i < maxFilters; i++) {
 		await sendPacketSavitech(device, [
 			CMD_SAVI.READ,
 			CMD_SAVI.PEQ,
@@ -117,7 +118,7 @@ export function setupListener(device: HIDDevice) {
 			setGlobalGain(gain);
 		} else if (cmd === CMD_SAVI.PEQ && data.byteLength >= 34) {
 			const idx = data[4];
-			if (idx < NUM_BANDS) {
+			if (idx < eqState.length) {
 				const view = new DataView(data.buffer);
 				const rawFreq = view.getUint16(27, true);
 				const rawQ = view.getUint16(29, true);
@@ -144,7 +145,8 @@ export function setupListener(device: HIDDevice) {
 					q <= 0;
 
 				// Update State from Device with validation
-				eqState[idx].freq = isInvalidData ? DEFAULT_FREQS[idx] : freq;
+				const fallbackFreqs = getActiveConfig()?.defaultFreqs ?? DEFAULT_FREQS;
+				eqState[idx].freq = isInvalidData ? (fallbackFreqs[idx] ?? 1000) : freq;
 				eqState[idx].q = isInvalidData ? 1.0 : q;
 				eqState[idx].gain = isInvalidData ? 0 : gain;
 				eqState[idx].type = typeStr;
@@ -182,16 +184,25 @@ export async function syncToDevice() {
 	}
 
 	// 3. Commit / Temp Save
-	if (protocol === "SAVITECH") {
-		const currentGain = getGlobalGainState();
+	if (protocol === "WALKPLAY") {
+		const cfg = getActiveConfig();
+		const gainByte = cfg?.autoGlobalGain ? 0x00 : getGlobalGainState();
 		await sendPacketSavitech(device, [
 			CMD_SAVI.WRITE,
 			CMD_SAVI.TEMP,
 			0x04,
 			0x00,
-			currentGain,
+			gainByte,
 			0xff,
 			0xff,
+			CMD_SAVI.END,
+		]);
+		await delay(50);
+		await sendPacketSavitech(device, [
+			CMD_SAVI.WRITE,
+			CMD_SAVI.FLASH,
+			0x01,
+			getCurrentSlotId(),
 			CMD_SAVI.END,
 		]);
 	}
@@ -229,12 +240,12 @@ export async function flashToFlash() {
 		const packet = new Uint8Array([CMD_MOON.WRITE, CMD_MOON.SAVE_FLASH]);
 		await device.sendReport(REPORT_ID_DEFAULT, packet);
 	} else {
-		// Savitech Save
+		// Walkplay / Savitech Save
 		await sendPacketSavitech(device, [
 			CMD_SAVI.WRITE,
 			CMD_SAVI.FLASH,
 			0x01,
-			0x00,
+			getCurrentSlotId(),
 			CMD_SAVI.END,
 		]);
 	}
@@ -248,7 +259,7 @@ export async function flashToFlash() {
 export async function writeBand(
 	device: HIDDevice,
 	band: Band,
-	protocol: string,
+	protocol: Protocol,
 ) {
 	const effectiveGain = band.enabled ? band.gain : 0;
 

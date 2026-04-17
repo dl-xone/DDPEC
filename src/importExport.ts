@@ -1,4 +1,13 @@
-import { defaultEqState, getDevice, getEqState, getGlobalGainState, renderUI, setEqState, setGlobalGainState, } from "./fn.ts";
+import {
+	defaultEqState,
+	getActiveConfig,
+	getDevice,
+	getEqState,
+	getGlobalGainState,
+	renderUI,
+	setEqState,
+	setGlobalGainState,
+} from "./fn.ts";
 import { log, updateGlobalGain } from "./helpers.ts";
 import type { EQ } from "./main.ts";
 
@@ -16,7 +25,8 @@ export async function exportProfile() {
 	const eqState = getEqState();
 	if (!device) return;
 	const data = {
-		device: "JM98MAX",
+		device: device.productName ?? "Unknown",
+		config: getActiveConfig()?.key,
 		timestamp: new Date().toISOString(),
 		globalGain: globalGainState,
 		bands: eqState,
@@ -49,7 +59,7 @@ function parseJsonProfile(content: string): ProfileData {
  */
 function parseTextProfile(content: string): ProfileData {
 	const lines = content.split(/\r?\n/);
-	const bands: EQ = defaultEqState(); // Start with defaults
+	const bands: EQ = defaultEqState(getActiveConfig());
 	let globalGain = 0;
 
 	// Regex for Preamp: "Preamp: -8.0 dB"
