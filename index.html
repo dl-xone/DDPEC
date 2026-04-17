@@ -5,59 +5,162 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>DDPEC</title>
-  <script src="https://cdn.tailwindcss.com"></script>
 </head>
 
-<body class="font-sans bg-[#121212] text-gray-200 m-0 p-5 flex flex-col items-center min-h-screen">
-<div id="app"></div>
+<body class="font-sans bg-surface-0 text-text-1 m-0 p-0 flex flex-col h-screen overflow-hidden">
 
-<h1 class="text-2xl font-bold text-green-500 mb-1 uppercase tracking-[2px]">🎧 DDPEC</h1>
-<p class="text-gray-500 text-sm mb-5">It's a short for DAC DSP Parametric EQ Controller</p>
-
-<!-- Top Bar -->
-<div class="flex gap-4 w-full max-w-[1100px] bg-[#1e1e1e] p-4 rounded-lg items-center justify-between mb-5 border border-[#333] flex-wrap">
-  <div class="flex items-center gap-3">
-    <button id="btnConnect" class="px-4 py-2 rounded font-semibold cursor-pointer transition-all bg-green-500 text-black text-sm hover:bg-green-400">CONNECT</button>
-    <span id="statusBadge" class="px-3 py-1 rounded font-bold text-xs bg-[#333] text-gray-500">OFFLINE</span>
-    <span id="fwVersion" class="text-xs text-gray-600"></span>
+<!-- Top bar — brand + status pill + 2-tab nav (DSP / Device Settings) -->
+<header class="flex items-center justify-between px-6 h-[52px] border-b border-border">
+  <div class="flex items-center gap-3.5">
+    <span class="accent text-sm leading-none" style="color: var(--color-accent)">●</span>
+    <h1 class="wordmark"><b>DDPEC</b></h1>
   </div>
+  <div class="flex items-center gap-6">
+    <span class="font-mono text-[10px] uppercase tracking-[0.2em] text-text-3">Device status:</span>
+    <span id="statusBadge" class="status-pill disconnected">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="statusText">Disconnected</span>
+      <span id="deviceName"></span>
+    </span>
+    <button id="btnConnect" class="btn-primary">Connect</button>
+    <nav class="flex items-center gap-0 ml-3" role="tablist" aria-label="Primary">
+      <button type="button" id="navTabDsp" class="nav-tab active" role="tab" aria-selected="true" title="DSP Settings (press ? for shortcuts)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 8l8-4 8 4M4 8v8l8 4 8-4V8M4 8l8 4 8-4M12 12v8"/></svg>
+        DSP Settings
+      </button>
+      <button type="button" id="navTabDevice" class="nav-tab" role="tab" aria-selected="false" title="Device Settings">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 10v6M4.22 4.22l4.24 4.24m7.07 7.07l4.24 4.24M1 12h6m10 0h6M4.22 19.78l4.24-4.24m7.07-7.07l4.24-4.24"/></svg>
+        Device Settings
+      </button>
+    </nav>
+  </div>
+</header>
 
-  <div class="flex items-center gap-3">
-    <div class="text-right">
-      <label class="text-xs text-gray-400 block">Pre-Amp</label>
-      <div id="globalGainDisplay" class="font-bold text-green-500">0 dB</div>
+<!-- Preset action bar — undo/redo + preset title + outline actions -->
+<div class="flex items-center justify-between px-6 py-2.5 border-b border-border">
+  <div class="flex items-center gap-2.5">
+    <button type="button" id="btnUndo" class="btn-ghost-icon" title="Undo (Cmd+Z)" aria-label="Undo">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L3 8"/></svg>
+    </button>
+    <button type="button" id="btnRedo" class="btn-ghost-icon" title="Redo (Shift+Cmd+Z)" aria-label="Redo">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 7v6h-6"/><path d="M20.49 15A9 9 0 1 1 18.36 5.64L21 8"/></svg>
+    </button>
+    <div id="presetTitle" class="flex items-center gap-2.5 text-sm font-semibold text-text-1">
+      <span id="presetStar" class="text-[#e5b850]">★</span>
+      <span id="presetName">Untitled</span>
+      <button type="button" id="btnPresetDelete" class="btn-ghost-icon" title="Delete preset" aria-label="Delete preset">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
+      </button>
     </div>
-    <input type="range" id="globalGainSlider" min="-20" max="10" step="1" value="0" class="w-[200px]" disabled>
   </div>
+  <div class="flex items-center gap-2.5">
+    <span id="presetChangedChip" class="chip-pending" hidden>Preset changed</span>
+    <button type="button" id="btnUpdatePreset" class="btn-outline">Update Preset</button>
+    <button type="button" id="btnSaveAsNew" class="btn-outline">Save As New Preset</button>
+    <button type="button" id="btnGetLink" class="btn-outline">
+      Get link
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+    </button>
+    <button type="button" id="btnExport" class="btn-outline">Export</button>
+  </div>
+</div>
 
-  <div class="flex items-center gap-3">
-    <label class="text-xs text-gray-400">Slot</label>
-    <select id="slotSelect" class="bg-[#2a2a2a] text-gray-200 text-sm rounded px-2 py-1 border border-[#333]" disabled>
+<!-- Secondary action row — A/B slots, slot picker, pre-amp -->
+<div class="flex items-center gap-6 px-6 py-2 border-b border-border font-mono text-[11px]">
+  <div class="flex items-center gap-0.5" role="tablist" aria-label="Active tuning">
+    <button type="button" id="btnSlotA" class="ab-btn active" role="tab" aria-selected="true">A</button>
+    <button type="button" id="btnSlotB" class="ab-btn" role="tab" aria-selected="false">B</button>
+    <button type="button" id="btnSlotSwap" class="ab-btn swap" title="Swap A ↔ B (Alt+S)" aria-label="Swap A and B (Alt+S)">↔</button>
+  </div>
+  <div class="flex items-center gap-2">
+    <span class="font-mono text-[9px] uppercase tracking-[0.2em] text-text-3">Slot</span>
+    <select id="slotSelect" class="bg-transparent text-text-2 font-mono text-[11px] border-0 outline-none focus:outline-none focus:ring-1 focus:ring-accent disabled:text-text-3" disabled>
       <option value="">—</option>
     </select>
   </div>
-
-  <div class="btn-group flex gap-3">
-    <button id="btnReset" class="px-4 py-2 rounded font-semibold cursor-pointer transition-all bg-red-700 text-white text-sm hover:bg-red-600 reset" disabled>RESET DEFAULTS</button>
-    <button id="btnImport" class="px-4 py-2 rounded font-semibold cursor-pointer transition-all bg-gray-700 text-white text-sm hover:bg-gray-600">Import</button>
-    <button id="btnExport" class="px-4 py-2 rounded font-semibold cursor-pointer transition-all bg-gray-700 text-white text-sm hover:bg-gray-600" disabled>Export</button>
-    <input type="file" id="fileInput" accept=".json,.txt" style="display: none;">
+  <div class="flex items-center gap-2">
+    <span class="font-mono text-[9px] uppercase tracking-[0.2em] text-text-3">Pre-amp</span>
+    <input type="range" id="globalGainSlider" min="-20" max="10" step="1" value="0" class="w-[110px] accent-accent" disabled>
+    <span id="globalGainDisplay" class="font-mono text-[11px] text-text-1 min-w-[46px]">0 dB</span>
   </div>
+  <span id="slotLabel" class="sr-only">Slot A</span>
+  <!-- Hidden file import controls still needed by main.ts -->
+  <button id="btnImport" class="hidden" aria-hidden="true" tabindex="-1">Import</button>
+  <input type="file" id="fileInput" accept=".json,.txt" class="hidden">
 </div>
 
-<!-- EQ Container -->
-<div id="eqContainer" class="eq-container grid grid-cols-[repeat(auto-fit,minmax(110px,1fr))] gap-2 w-full max-w-[1100px] mb-5">
-  <!-- EQ strips will be dynamically inserted here -->
+<!-- Main: canvas + tabular editor | preset sidebar -->
+<main class="flex-1 flex overflow-hidden min-h-0">
+  <section class="flex-1 flex flex-col min-w-0 border-r border-border">
+    <!-- EQ canvas + tabular editor rendered by peq.ts -->
+    <div id="eqContainer" class="flex-1 flex flex-col min-h-0"></div>
+
+    <!-- Bottom panel tabs + EQ enabled switch. Sits immediately under #eqContainer. -->
+    <div class="flex items-center justify-between px-6 pt-2.5 border-t border-border">
+      <div class="flex gap-0" role="tablist" aria-label="Editor view">
+        <button type="button" id="tabTabular" class="bt active" role="tab" aria-selected="true">Tabular EQ</button>
+        <button type="button" id="tabPreamp" class="bt" role="tab" aria-selected="false">Preamp Gain</button>
+      </div>
+      <label class="switch" title="Enable EQ">
+        <input type="checkbox" id="eqEnabledSwitch" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+  </section>
+
+  <aside id="presetSidebar" class="w-[220px] shrink-0 flex-col overflow-y-auto py-4 px-4 gap-6 hidden lg:flex">
+    <!-- MODE -->
+    <section>
+      <h3 class="sidebar-head">Mode</h3>
+      <div class="mode-group" role="tablist" aria-label="Output mode">
+        <button type="button" id="modeHeadphone" class="mode-opt active" role="tab" aria-selected="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 14v-3a9 9 0 0 1 18 0v3"/><path d="M21 14a2 2 0 0 1-2 2h-1v-5h1a2 2 0 0 1 2 2v1zM3 14a2 2 0 0 0 2 2h1v-5H5a2 2 0 0 0-2 2v1z"/></svg>
+          Headphone
+        </button>
+        <button type="button" id="modeRca" class="mode-opt" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="7" cy="12" r="3"/><circle cx="17" cy="12" r="3"/></svg>
+          RCA
+        </button>
+      </div>
+    </section>
+
+    <!-- MY PRESETS -->
+    <section>
+      <h3 class="sidebar-head">My Presets</h3>
+      <div class="flex items-center gap-2 border-b border-border px-0.5 py-1.5 mb-2">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-text-3" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input type="search" id="presetSearch" placeholder="Filter presets" class="flex-1 bg-transparent text-text-1 text-xs outline-none placeholder:text-text-3" />
+      </div>
+      <div id="presetList" class="flex flex-col gap-0.5"></div>
+      <button type="button" id="btnDisableEq" class="btn-disable">Disable EQ</button>
+    </section>
+
+    <!-- LOAD EXTERNAL -->
+    <section>
+      <h3 class="sidebar-head">Load External</h3>
+      <div class="flex flex-col gap-1">
+        <button type="button" id="btnTarget" class="prow">Target curve…</button>
+        <button type="button" id="btnMeasurement" class="prow">FR overlay…</button>
+        <button type="button" id="btnBrowseAutoEq" class="prow">AutoEQ database…</button>
+        <button type="button" id="btnBrowseSquig" class="prow">squig.link…</button>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<!-- Commit bar — wraps Sync/Flash so it can be hidden when clean -->
+<div id="commitBar" class="flex items-center justify-end gap-2.5 px-6 py-3 border-t border-border">
+  <span id="pendingChangesChip" class="chip-pending" hidden>Pending changes</span>
+  <button id="btnSync" class="btn-primary" disabled>Sync to RAM</button>
+  <button id="btnFlash" class="btn-primary" disabled>Save to flash</button>
 </div>
 
-<!-- Bottom Bar -->
-<div class="top-bar flex gap-4 w-full max-w-[1100px] bg-[#1e1e1e] p-4 rounded-lg items-center justify-end mb-5 border border-[#333] flex-wrap">
-  <button id="btnSync" class="action px-4 py-2 rounded font-semibold cursor-pointer transition-all bg-blue-600 text-white text-sm hover:bg-blue-500" disabled>SYNC TO RAM (APPLY)</button>
-  <button id="btnFlash" class="action px-4 py-2 rounded font-semibold cursor-pointer transition-all bg-orange-700 text-white text-sm hover:bg-orange-600" disabled>SAVE TO FLASH (PERMANENT)</button>
+<!-- Log tray — collapsible. #logTrayLatest shows last line; #logConsole holds full log when expanded. -->
+<div id="logTray" class="logtray" role="button" tabindex="0" aria-expanded="false" aria-controls="logConsole" title="Click to expand log">
+  <span id="logTrayCaret" class="caret">▸</span>
+  <span id="logTrayLatest" class="latest">Ready to connect...</span>
 </div>
-
-<!-- Log Console -->
-<div id="logConsole" class="w-full max-w-[1100px] h-20 bg-black border border-gray-400 text-gray-400 font-mono text-xs p-3 overflow-y-auto box-border mt-3">Ready to connect...</div>
+<div id="logConsole" class="log-console px-6 py-2 text-[10px] font-mono text-text-3 overflow-y-auto max-h-[120px] border-t border-border hidden">Ready to connect...</div>
 
 <script type="module" src="/src/main.ts"></script>
 </body>

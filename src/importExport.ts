@@ -1,19 +1,61 @@
+import { renderUI } from "./fn.ts";
+import { log, updateGlobalGain } from "./helpers.ts";
+import type { Band, EQ } from "./main.ts";
 import {
 	defaultEqState,
 	getActiveConfig,
 	getDevice,
 	getEqState,
 	getGlobalGainState,
-	renderUI,
 	setEqState,
 	setGlobalGainState,
-} from "./fn.ts";
-import { log, updateGlobalGain } from "./helpers.ts";
-import type { EQ } from "./main.ts";
+} from "./state.ts";
 
 interface ProfileData {
 	globalGain: number;
 	bands: EQ;
+}
+
+// REW / Equalizer APO use short tokens (PK, LS, HS, LSC, HSC); internally
+// we store the Q-width shelf variants LSQ/HSQ. Treat unknown tokens as PK
+// with a warning rather than silently passing through a garbage type.
+const REW_TYPE_MAP: Record<string, Band["type"]> = {
+	PK: "PK",
+	LS: "LSQ",
+	LSQ: "LSQ",
+	LSC: "LSQ",
+	HS: "HSQ",
+	HSQ: "HSQ",
+	HSC: "HSQ",
+};
+
+/**
+ * Fit imported bands to the active device's band count. If the profile
+ * has fewer bands than the device supports, remaining slots are reset
+ * to defaults; excess bands are dropped. Both cases are logged.
+ */
+function fitBandsToConfig(bands: EQ): EQ {
+	const cfg = getActiveConfig();
+	const defaults = defaultEqState(cfg);
+	const max = defaults.length;
+
+	if (bands.length === max) return bands.map((b, i) => ({ ...b, index: i }));
+
+	if (bands.length > max) {
+		log(
+			`Import: profile has ${bands.length} bands, device supports ${max}. Truncating.`,
+		);
+		return bands.slice(0, max).map((b, i) => ({ ...b, index: i }));
+	}
+
+	log(
+		`Import: profile has ${bands.length} bands, device supports ${max}. Filling remaining with defaults.`,
+	);
+	const filled = defaults.slice();
+	for (let i = 0; i < bands.length; i++) {
+		filled[i] = { ...bands[i], index: i };
+	}
+	return filled;
 }
 
 /**
@@ -86,23 +128,23 @@ function parseTextProfile(content: string): ProfileData {
 			const index = parseInt(filterMatch[1], 10) - 1; // 1-based to 0-based
 			if (index >= 0 && index < bands.length) {
 				const enabled = filterMatch[2].toUpperCase() === "ON";
-				const type = filterMatch[3]; // e.g. PK, LS, HS - assuming mapping matches or is standard
+				const rawType = filterMatch[3].toUpperCase();
+				const type = REW_TYPE_MAP[rawType];
+				if (!type) {
+					log(
+						`Import: unknown filter type "${rawType}" at filter ${index + 1}, defaulting to PK`,
+					);
+				}
 				const freq = parseFloat(filterMatch[4]);
 				const gain = parseFloat(filterMatch[5]);
 				const q = parseFloat(filterMatch[6]);
-
-				// Map type string if necessary. The user provided "PK".
-				// Our internal types might need verification.
-				// Assuming "PK" maps to "PK", "LS" to "LS", etc.
-				// If "PK" in text is "PEAK" internally, we might need mapping.
-				// Checking defaultEqState in fn.ts shows "PK" as default, so it's likely compatible.
 
 				bands[index] = {
 					...bands[index],
 					freq,
 					gain,
 					q,
-					type: type as any, // Cast to string/enum
+					type: type ?? "PK",
 					enabled,
 				};
 			}
@@ -110,6 +152,30 @@ function parseTextProfile(content: string): ProfileData {
 	}
 
 	return { globalGain, bands };
+}
+
+// Parse a raw profile string (JSON or REW-format text) and apply it.
+// Shared by file-based imports and programmatic loaders (e.g. AutoEQ).
+export function applyProfileText(text: string, sourceName: string) {
+	let profile: ProfileData;
+
+	if (text.trim().startsWith("{")) {
+		profile = parseJsonProfile(text);
+	} else if (
+		text.trim().startsWith("Preamp:") ||
+		text.includes("Filter 1:")
+	) {
+		profile = parseTextProfile(text);
+	} else {
+		throw new Error("Unknown profile format");
+	}
+
+	const fitted = fitBandsToConfig(profile.bands);
+	setEqState(fitted);
+	setGlobalGainState(profile.globalGain);
+	updateGlobalGain(profile.globalGain);
+	renderUI(fitted);
+	log(`Profile imported: ${sourceName}. Click 'SYNC' to apply.`);
 }
 
 /**
@@ -126,29 +192,7 @@ export async function importProfile(e: Event) {
 	reader.onload = (event) => {
 		try {
 			const result = event.target?.result as string;
-			let profile: ProfileData;
-
-			// Simple heuristic detection
-			if (result.trim().startsWith("{")) {
-				profile = parseJsonProfile(result);
-			} else if (
-				result.trim().startsWith("Preamp:") ||
-				result.includes("Filter 1:")
-			) {
-				profile = parseTextProfile(result);
-			} else {
-				throw new Error("Unknown file format");
-			}
-
-			// Update internal state
-			setEqState(profile.bands);
-			setGlobalGainState(profile.globalGain);
-
-			// Update UI and send gain packet
-			updateGlobalGain(profile.globalGain);
-			renderUI(profile.bands);
-
-			log("Profile imported. Click 'SYNC' to apply.");
+			applyProfileText(result, file.name);
 		} catch (err) {
 			log(`Import Error: ${(err as Error).message}`);
 			console.error(err);

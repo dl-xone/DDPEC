@@ -1,5 +1,4 @@
 import { setDeviceGlobalGain } from "./dsp.ts";
-import type { EQ } from "./main.ts";
 
 /**
  * Console element
@@ -7,37 +6,11 @@ import type { EQ } from "./main.ts";
 const c = document.getElementById("logConsole") as HTMLElement;
 
 /**
- * Refresh strip UI
- * @param eqState The EQ state to refresh
- * @param i The band index
+ * JDS pivot 2026-04-17 — "latest line" mirror shown in the collapsed log tray.
+ * Every append to #logConsole also updates this so users see the most recent
+ * event without expanding the tray.
  */
-export function refreshStripUI(eqState: EQ, i: number) {
-	// Only updates values, does not re-create DOM (prevents focus loss)
-	const band = eqState[i];
-	const gainInput = document.querySelector(
-		`#num-gain-${i}`,
-	) as HTMLInputElement;
-	const rangeInput = document.querySelector(
-		`.eq-strip:nth-child(${i + 1}) input[type=range]`,
-	) as HTMLInputElement;
-	const freqInput = document.querySelector(
-		`#num-freq-${i}`,
-	) as HTMLInputElement;
-	const qInput = document.querySelector(`#num-q-${i}`) as HTMLInputElement;
-	const typeSelect = document.querySelector(
-		`#sel-type-${i}`,
-	) as HTMLSelectElement;
-	const checkInput = document.querySelector(
-		`.eq-strip:nth-child(${i + 1}) input[type=checkbox]`,
-	) as HTMLInputElement;
-
-	if (gainInput) gainInput.value = band.gain.toString();
-	if (rangeInput) rangeInput.value = band.gain.toString();
-	if (freqInput) freqInput.value = band.freq.toString();
-	if (qInput) qInput.value = band.q.toString();
-	if (typeSelect) typeSelect.value = band.type;
-	if (checkInput) checkInput.checked = band.enabled;
-}
+const logTrayLatest = document.getElementById("logTrayLatest") as HTMLElement | null;
 
 /**
  * Update global gain UI
@@ -65,46 +38,96 @@ export async function updateGlobalGain(newGlobalGainState: number) {
 }
 
 /**
- * Set global gain and send to device
- * @param e The event object
+ * Event handler for the global-gain slider. Delegates to updateGlobalGain,
+ * which updates the UI and sends the packet; state is updated by
+ * setDeviceGlobalGain → fn.setGlobalGain.
  */
 export async function setGlobalGain(e: Event) {
 	const globalGainEl = e.target as HTMLInputElement;
-	// We import setGlobalGainState from fn.ts to update state,
-	// but circular deps might be annoying.
-	// Assuming fn.ts handles state update via its own export or we call it here.
-	// Ideally, fn.ts should expose a setter that calls helpers.ts/dsp.ts.
-	// For now, let's assume the event listener in fn.ts/main.ts calls the state setter.
-
-	const newGlobalGainState = Number(globalGainEl.value);
-	// Note: State update should happen in fn.ts setGlobalGain() which calls this.
-	// If this is the event handler directly:
-	await updateGlobalGain(newGlobalGainState);
+	await updateGlobalGain(Number(globalGainEl.value));
 }
 
-/**
- * Enable/Disable controls
- * @param enabled
- */
+// Toggle controls that genuinely need a live device: the hardware slot
+// selector, the pre-amp (on Walkplay the device overwrites this value on
+// connect anyway), and the two commit actions. Everything else — band
+// editing, presets, targets, signals, import/export, reset — works in
+// memory and stays interactive regardless of connection state.
 export function enableControls(enabled: boolean) {
-	const els = document.querySelectorAll(
-		"input, select, button.action, button.reset, button#btnExport",
-	);
-	for (const el of els) {
+	const selector = "#globalGainSlider, #slotSelect, #btnSync, #btnFlash";
+	for (const el of document.querySelectorAll(selector)) {
 		(el as HTMLInputElement | HTMLSelectElement | HTMLButtonElement).disabled =
 			!enabled;
 	}
 }
 
 /**
- * Log message to the app console
+ * Log message to the app console. Also updates the collapsed log-tray's
+ * "latest" preview so single-line feedback is visible without expanding.
  *
  * @param msg
  */
 export function log(msg: string) {
-	if (!c) return;
-	c.innerHTML += `<div>[${new Date().toLocaleTimeString()}] ${msg}</div>`;
-	c.scrollTop = c.scrollHeight;
+	const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+	if (c) {
+		c.innerHTML += `<div>${line}</div>`;
+		c.scrollTop = c.scrollHeight;
+	}
+	// Mirror to the tray. Resolve lazily in case it was not present at
+	// module-load time (e.g. during a test harness).
+	const latest =
+		logTrayLatest ?? (document.getElementById("logTrayLatest") as HTMLElement | null);
+	if (latest) latest.textContent = line;
+}
+
+/**
+ * JDS pivot: toggle the document-level `.app-offline` class. peq.ts /
+ * style.css key visual-dim affordances off it. Idempotent.
+ */
+export function setAppOffline(offline: boolean) {
+	document.body.classList.toggle("app-offline", offline);
+}
+
+/**
+ * JDS pivot: tiny toast helper. Stacks bottom-right, auto-dismiss after
+ * 2.5s. Avoids adding a dependency and avoids polluting the log when the
+ * feedback is only momentarily useful (copy to clipboard, etc.).
+ */
+export function toast(msg: string, ms = 2500) {
+	const host =
+		document.getElementById("ddpec-toasts") ??
+		(() => {
+			const el = document.createElement("div");
+			el.id = "ddpec-toasts";
+			el.style.position = "fixed";
+			el.style.right = "16px";
+			el.style.bottom = "40px";
+			el.style.display = "flex";
+			el.style.flexDirection = "column";
+			el.style.gap = "8px";
+			el.style.zIndex = "60";
+			el.style.pointerEvents = "none";
+			document.body.appendChild(el);
+			return el;
+		})();
+	const t = document.createElement("div");
+	t.textContent = msg;
+	t.style.background = "var(--color-surface-2)";
+	t.style.color = "var(--color-text-1)";
+	t.style.border = "1px solid var(--color-border)";
+	t.style.borderRadius = "4px";
+	t.style.padding = "8px 12px";
+	t.style.fontSize = "12px";
+	t.style.boxShadow = "0 4px 12px rgba(0,0,0,0.4)";
+	t.style.opacity = "0";
+	t.style.transition = "opacity 120ms ease-out";
+	host.appendChild(t);
+	requestAnimationFrame(() => {
+		t.style.opacity = "1";
+	});
+	setTimeout(() => {
+		t.style.opacity = "0";
+		setTimeout(() => t.remove(), 200);
+	}, ms);
 }
 
 /**

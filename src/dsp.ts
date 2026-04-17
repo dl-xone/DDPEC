@@ -3,21 +3,27 @@ import {
 	CMD_MOON,
 	CMD_SAVI,
 	DEFAULT_FREQS,
-	PACKET_SIZE,
 	REPORT_ID_DEFAULT,
 	REPORT_ID_FIIO,
 } from "./constants.ts";
 import type { Protocol } from "./deviceConfig.ts";
+import {
+	encodeFiioBand,
+	encodeMoondropBand,
+	encodeMoondropEnable,
+	encodeSavitechBand,
+	padSavitech,
+} from "./dsp/encoders.ts";
+import { renderUI, setGlobalGain } from "./fn.ts";
+import { delay, log } from "./helpers.ts";
+import { confirmModal } from "./modal.ts";
 import {
 	getActiveConfig,
 	getCurrentSlotId,
 	getDevice,
 	getEqState,
 	getGlobalGainState,
-	renderUI,
-	setGlobalGain,
-} from "./fn.ts";
-import { delay, log, refreshStripUI } from "./helpers.ts";
+} from "./state.ts";
 import type { Band } from "./main.ts";
 
 /**
@@ -152,8 +158,6 @@ export function setupListener(device: HIDDevice) {
 				eqState[idx].type = typeStr;
 				// Note: Hardware doesn't store an "enabled" state, assume enabled if gain != 0 or default
 				eqState[idx].enabled = true;
-
-				refreshStripUI(eqState, idx);
 			}
 		}
 
@@ -163,24 +167,38 @@ export function setupListener(device: HIDDevice) {
 
 // --- MAIN SYNC FUNCTION ---
 
-/**
- * Sync EQ state to device
- */
-export async function syncToDevice() {
+export type ProgressFn = (packetIndex: number, totalPackets: number) => void;
+
+// Invoke the progress callback; if it throws, log and continue so a buggy
+// UI callback can't abort an in-flight sync. (eng review critical gap)
+function safeProgress(onProgress: ProgressFn | undefined, i: number, n: number) {
+	if (!onProgress) return;
+	try {
+		onProgress(i, n);
+	} catch (err) {
+		console.warn("sync progress callback threw:", err);
+	}
+}
+
+// Sync the current EQ state to device RAM. Optional onProgress reports
+// per-band completion so the UI can show a progress bar.
+export async function syncToDevice(onProgress?: ProgressFn) {
 	const device = getDevice();
 	const eqState = getEqState();
 	if (!device || !eqState) return;
 
 	const protocol = getProtocol(device);
 	log(`Syncing via protocol: ${protocol}...`);
+	const total = eqState.length;
 
 	// 1. Write Global Gain (Reuse the function above)
 	await setDeviceGlobalGain(getGlobalGainState());
 
 	// 2. Write Bands
-	for (const band of eqState) {
-		await writeBand(device, band, protocol);
+	for (let i = 0; i < eqState.length; i++) {
+		await writeBand(device, eqState[i], protocol);
 		await delay(30);
+		safeProgress(onProgress, i + 1, total);
 	}
 
 	// 3. Commit / Temp Save
@@ -198,6 +216,10 @@ export async function syncToDevice() {
 			CMD_SAVI.END,
 		]);
 		await delay(50);
+		// TODO (plan 1.2): verify this is a temp-buffer commit, not a flash
+		// write. Current code issues the same packet here and in flashToFlash,
+		// so "SYNC TO RAM" may be persisting to a slot. Resolve with a
+		// protocol capture before shipping Wave 2.
 		await sendPacketSavitech(device, [
 			CMD_SAVI.WRITE,
 			CMD_SAVI.FLASH,
@@ -210,13 +232,32 @@ export async function syncToDevice() {
 	log("Sync Complete.");
 }
 
-/**
- * Save EQ state to permanent memory
- */
-export async function flashToFlash() {
+// Save EQ state to permanent memory. Optional onProgress is called with
+// (1, 1) on success so callers can drive a unified progress UI even
+// though flash is a single-packet operation.
+//
+// JDS pivot 2026-04-17: callers that already surface a user-facing confirm
+// (e.g. the anchored popover in fn.ts) may pass `{ skipConfirm: true }` to
+// suppress the internal confirmModal and avoid a double prompt. Default
+// behaviour is unchanged so `resetToDefaults`-style callers keep working.
+export async function flashToFlash(
+	onProgress?: ProgressFn,
+	opts?: { skipConfirm?: boolean },
+) {
 	const device = getDevice();
 	if (!device) return;
-	if (!confirm("Save to permanent memory?")) return;
+	const slot = getCurrentSlotId();
+	if (!opts?.skipConfirm) {
+		const ok = await confirmModal(
+			`Save current EQ to slot ${slot} on the device's flash memory? This persists across reboots and cannot be undone from the tool.`,
+			{
+				title: "Save to flash?",
+				confirmLabel: "Save to flash",
+				cancelLabel: "Cancel",
+			},
+		);
+		if (!ok) return;
+	}
 
 	const protocol = getProtocol(device);
 
@@ -250,6 +291,7 @@ export async function flashToFlash() {
 		]);
 	}
 
+	safeProgress(onProgress, 1, 1);
 	log("Saved to Flash.");
 }
 
@@ -282,31 +324,11 @@ export async function writeBand(
  * @param gain The gain to set
  */
 async function writeBandSavitech(device: HIDDevice, band: Band, gain: number) {
-	const bArr = computeIIRFilter(band.freq, gain, band.q);
-	const typeMap = { PK: 2, LSQ: 1, HSQ: 3 };
-
-	const freqBytes = toBytes(band.freq, 2);
-	const qBytes = toBytes(Math.round(band.q * 256), 2);
-	const gainBytes = toBytes(Math.round(gain * 256), 2);
-
-	const packet = [
-		CMD_SAVI.WRITE,
-		CMD_SAVI.PEQ,
-		0x18,
-		0x00,
-		band.index,
-		0x00,
-		0x00,
-		...bArr,
-		...freqBytes,
-		...qBytes,
-		...gainBytes,
-		typeMap[band.type as keyof typeof typeMap],
-		0x00,
-		0x00,
-		CMD_SAVI.END,
-	];
-	await sendPacketSavitech(device, packet);
+	try {
+		await device.sendReport(REPORT_ID_DEFAULT, encodeSavitechBand(band, gain));
+	} catch (err) {
+		log(`TX Error: ${(err as Error).message}`);
+	}
 }
 
 // --------------------------------------------------------------------------
@@ -319,43 +341,8 @@ async function writeBandSavitech(device: HIDDevice, band: Band, gain: number) {
  * @param gain The gain to set
  */
 async function writeBandMoondrop(device: HIDDevice, band: Band, gain: number) {
-	const coeffs = encodeBiquadMoondrop(band.freq, gain, band.q);
-	const typeMap = { PK: 2, LSQ: 1, HSQ: 3 };
-
-	const packet = new Uint8Array(63);
-	packet[0] = CMD_MOON.WRITE;
-	packet[1] = CMD_MOON.UPDATE_EQ;
-	packet[2] = 0x18;
-	packet[3] = 0x00;
-	packet[4] = band.index;
-
-	const coeffBytes = encodeToByteArray(coeffs);
-	packet.set(coeffBytes, 7);
-
-	packet[27] = band.freq & 0xff;
-	packet[28] = (band.freq >> 8) & 0xff;
-
-	const qVal = Math.round(band.q * 256);
-	packet[29] = qVal & 255;
-	packet[30] = (qVal >> 8) & 255;
-
-	const gainVal = Math.round(gain * 256);
-	packet[31] = gainVal & 255;
-	packet[32] = (gainVal >> 8) & 255;
-
-	packet[33] = typeMap[band.type as keyof typeof typeMap];
-	packet[35] = REPORT_ID_DEFAULT;
-
-	await device.sendReport(REPORT_ID_DEFAULT, packet);
-
-	const enablePacket = new Uint8Array(63);
-	enablePacket[0] = CMD_MOON.WRITE;
-	enablePacket[1] = CMD_MOON.UPDATE_EQ_COEFF;
-	enablePacket[2] = band.index;
-	enablePacket[4] = 255;
-	enablePacket[5] = 255;
-	enablePacket[6] = 255;
-	await device.sendReport(REPORT_ID_DEFAULT, enablePacket);
+	await device.sendReport(REPORT_ID_DEFAULT, encodeMoondropBand(band, gain));
+	await device.sendReport(REPORT_ID_DEFAULT, encodeMoondropEnable(band.index));
 }
 
 /**
@@ -385,45 +372,7 @@ async function setGlobalGainMoondrop(device: HIDDevice, gain: number) {
  * @param gain The gain to set
  */
 async function writeBandFiio(device: HIDDevice, band: Band, gain: number) {
-	// FiiO does NOT use Biquads. It takes raw params.
-	const typeMap = { PK: 0, LSQ: 1, HSQ: 2 }; // Note: Mapping might differ from Savitech
-
-	const freqLow = band.freq & 0xff;
-	const freqHigh = (band.freq >> 8) & 0xff;
-
-	// Gain mapping (Fiio specific)
-	let t = gain * 10;
-	if (t < 0) t = (Math.abs(t) ^ 65535) + 1;
-	const gainLow = (t >> 8) & 0xff; // Fiio swaps high/low vs standard? Logic copied from fiioUsbHandler.js
-	const gainHigh = t & 0xff;
-
-	const qVal = Math.round(band.q * 100); // FiiO uses *100, not *256
-	const qLow = (qVal >> 8) & 0xff;
-	const qHigh = qVal & 0xff;
-
-	// Packet: AA 0A 00 00 15 08 [Idx] [GainH] [GainL] [FreqL] [FreqH] [QL] [QH] [Type] 00 EE
-	const packet = new Uint8Array([
-		CMD_FIIO.HEADER_SET_1,
-		CMD_FIIO.HEADER_SET_2,
-		0,
-		0,
-		CMD_FIIO.FILTER_PARAMS,
-		8,
-		band.index,
-		gainLow,
-		gainHigh, // Note: Provided file had logic fiioGainBytesFromValue returns [High, Low] or [Low, High]?
-		// Looking at fiioUsbHidHandler.js: "gainLow, gainHigh" in array.
-		// But function returns [r, n] where r is shifted >> 8. So r is High byte.
-		freqLow,
-		freqHigh,
-		qLow,
-		qHigh,
-		typeMap[band.type as keyof typeof typeMap],
-		0,
-		CMD_FIIO.END,
-	]);
-
-	await device.sendReport(REPORT_ID_FIIO, packet);
+	await device.sendReport(REPORT_ID_FIIO, encodeFiioBand(band, gain));
 }
 
 /**
@@ -456,103 +405,13 @@ async function setGlobalGainFiio(device: HIDDevice, gain: number) {
 // HELPER FUNCTIONS
 // --------------------------------------------------------------------------
 /**
- * Send a packet to a Savitech device
- * @param device The device to send the packet to
- * @param bytes The bytes to send
+ * Send a padded Savitech control packet (non-band; band packets use
+ * encodeSavitechBand directly).
  */
 async function sendPacketSavitech(device: HIDDevice, bytes: number[]) {
 	try {
-		const p = new Uint8Array(PACKET_SIZE);
-		for (let i = 0; i < bytes.length; i++) p[i] = bytes[i];
-		await device.sendReport(REPORT_ID_DEFAULT, p);
+		await device.sendReport(REPORT_ID_DEFAULT, padSavitech(bytes));
 	} catch (err) {
 		log(`TX Error: ${(err as Error).message}`);
 	}
-}
-
-/**
- * Convert a number to an array of bytes
- * @param n The number to convert
- * @param c The number of bytes to convert to
- */
-function toBytes(n: number, c: number) {
-	return [...Array(c)].map((_, i) => (n >> (8 * i)) & 0xff);
-}
-
-// --- MATH: SAVITECH ---
-/**
- * Compute IIR filter coefficients
- * @param freq Frequency in Hz
- * @param gain Gain in dB
- * @param q Q factor
- */
-function computeIIRFilter(freq: number, gain: number, q: number) {
-	const fs = 96000;
-	const A = 10 ** (gain / 20);
-	const w0 = (freq * 2 * Math.PI) / fs;
-	const alpha = Math.sin(w0) / (2 * q);
-	const d4 = alpha * Math.sqrt(A);
-	const d5 = alpha / Math.sqrt(A);
-	const inv_a0 = 1 / (d5 + 1);
-	/**
-	 * @var s Scale factor for Q30
-	 */
-	const s = 1073741824;
-	/**
-	 * Convert a number to a Q30 value
-	 * @param n Number to convert
-	 */
-	const q30 = (n: number) => Math.round(n * s);
-
-	return [
-		q30((1 + d4) * inv_a0),
-		q30(-2 * Math.cos(w0) * inv_a0),
-		q30((1 - d4) * inv_a0),
-		q30(-(-2 * Math.cos(w0) * inv_a0)),
-		q30(-((1 - d5) * inv_a0)),
-	].flatMap((v) => [
-		v & 0xff,
-		(v >> 8) & 0xff,
-		(v >> 16) & 0xff,
-		(v >> 24) & 0xff,
-	]);
-}
-
-// --- MATH: MOONDROP (COMTRUE) ---
-/**
- * Encode a biquad filter for Moondrop devices
- * @param freq Frequency in Hz
- * @param gain Gain in dB
- * @param q Q factor
- */
-function encodeBiquadMoondrop(freq: number, gain: number, q: number) {
-	const A = 10 ** (gain / 40);
-	const w0 = (2 * Math.PI * freq) / 96000;
-	const alpha = Math.sin(w0) / (2 * q);
-	const cosW0 = Math.cos(w0);
-	const norm = 1 + alpha / A;
-
-	const b0 = (1 + alpha * A) / norm;
-	const b1 = (-2 * cosW0) / norm;
-	const b2 = (1 - alpha * A) / norm;
-	const a1 = -b1; // Logic flips a1
-	const a2 = (1 - alpha / A) / norm;
-
-	return [b0, b1, b2, a1, -a2].map((c) => Math.round(c * 1073741824));
-}
-
-/**
- * Convert an array of coefficients to a byte array
- * @param coeffs Array of coefficients
- */
-function encodeToByteArray(coeffs: number[]) {
-	const arr = new Uint8Array(20);
-	for (let i = 0; i < coeffs.length; i++) {
-		const val = coeffs[i];
-		arr[i * 4] = val & 0xff;
-		arr[i * 4 + 1] = (val >> 8) & 0xff;
-		arr[i * 4 + 2] = (val >> 16) & 0xff;
-		arr[i * 4 + 3] = (val >> 24) & 0xff;
-	}
-	return arr;
 }

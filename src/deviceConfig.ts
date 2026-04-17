@@ -16,6 +16,9 @@ export interface DeviceConfig {
 	maxGain: number;
 	supportsLSHS: boolean;
 	autoGlobalGain: boolean;
+	// Whether connectToDevice can pull the current EQ state from the device.
+	// When false the UI shows defaults until the user syncs.
+	supportsReadback: boolean;
 	slots: EQSlot[];
 	defaultFreqs: number[];
 }
@@ -58,6 +61,7 @@ export const DEVICE_CONFIGS: DeviceConfig[] = [
 		maxGain: 12,
 		supportsLSHS: true,
 		autoGlobalGain: false,
+		supportsReadback: false,
 		slots: [{ id: 0, name: "Custom" }],
 		defaultFreqs: DEFAULT_FREQS_8,
 	},
@@ -71,6 +75,7 @@ export const DEVICE_CONFIGS: DeviceConfig[] = [
 		maxGain: 12,
 		supportsLSHS: true,
 		autoGlobalGain: false,
+		supportsReadback: false,
 		slots: FIIO_SLOTS,
 		defaultFreqs: DEFAULT_FREQS_8,
 	},
@@ -85,6 +90,7 @@ export const DEVICE_CONFIGS: DeviceConfig[] = [
 		maxGain: 10,
 		supportsLSHS: true,
 		autoGlobalGain: false,
+		supportsReadback: true,
 		slots: [{ id: 101, name: "Custom" }],
 		defaultFreqs: DEFAULT_FREQS_10,
 	},
@@ -99,6 +105,7 @@ export const DEVICE_CONFIGS: DeviceConfig[] = [
 		maxGain: 10,
 		supportsLSHS: true,
 		autoGlobalGain: true,
+		supportsReadback: true,
 		slots: [{ id: 101, name: "Custom" }],
 		defaultFreqs: DEFAULT_FREQS_10,
 	},
@@ -112,6 +119,7 @@ export const DEVICE_CONFIGS: DeviceConfig[] = [
 		maxGain: 10,
 		supportsLSHS: true,
 		autoGlobalGain: false,
+		supportsReadback: true,
 		slots: [{ id: 101, name: "Custom" }],
 		defaultFreqs: DEFAULT_FREQS_8,
 	},
@@ -125,6 +133,7 @@ export const DEVICE_CONFIGS: DeviceConfig[] = [
 		maxGain: 6,
 		supportsLSHS: false,
 		autoGlobalGain: false,
+		supportsReadback: true,
 		slots: [{ id: 101, name: "Custom" }],
 		defaultFreqs: DEFAULT_FREQS_8,
 	},

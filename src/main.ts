@@ -1,11 +1,16 @@
 import "./style.css";
-import { flashToFlash, syncToDevice } from "./dsp.ts";
 import {
-	connectToDevice,
+	handleFlashClick,
+	handleSyncClick,
 	initState,
 	onSlotChange,
-	resetToDefaults,
+	openKeyboardHelp,
+	redoAction,
+	swapABSlots,
+	toggleConnection,
+	undoAction,
 } from "./fn.ts";
+import { initTheme } from "./theme.ts";
 import { setGlobalGain } from "./helpers.ts";
 import { exportProfile, importProfile } from "./importExport.ts";
 
@@ -19,52 +24,182 @@ export type Band = {
 };
 export type EQ = Band[];
 
-// Initialize immediately
+// Initialize immediately. Theme first so the first paint respects the
+// persisted / system preference; state + canvas come second.
+initTheme();
 initState();
+
+/**
+ * Helper: dynamically import a named export from fn.ts and call it.
+ * Used for handlers that the fn.ts agent is still stubbing — avoids
+ * build-time failure if the export isn't there yet.
+ */
+async function callFnHandler(name: string, fallbackMessage: string) {
+	try {
+		const mod = (await import("./fn.ts")) as Record<string, unknown>;
+		const fn = mod[name];
+		if (typeof fn === "function") {
+			(fn as () => void)();
+			return;
+		}
+	} catch (err) {
+		console.warn(`Failed to import ${name} from fn.ts:`, err);
+	}
+	console.log(fallbackMessage);
+	alert(fallbackMessage);
+}
 
 /**
  * CONNECTION LOGIC
  */
-const connectBtn = document.getElementById("btnConnect");
-connectBtn?.addEventListener("click", async () => connectToDevice());
+document
+	.getElementById("btnConnect")
+	?.addEventListener("click", async () => toggleConnection());
 
 /**
- * RESET LOGIC
+ * SYNC LOGIC — wrapper adds progress modal + inert guard + errorModal.
  */
-const btnReset = document.getElementById("btnReset");
-btnReset?.addEventListener("click", async () => resetToDefaults());
+document
+	.getElementById("btnSync")
+	?.addEventListener("click", () => handleSyncClick());
 
 /**
- * SYNC LOGIC
+ * FLASH LOGIC — same wrapping for the permanent-write path.
  */
-const btnSync = document.getElementById("btnSync");
-btnSync!.addEventListener("click", syncToDevice);
-
-/**
- * FLASH LOGIC
- */
-const btnFlash = document.getElementById("btnFlash");
-btnFlash!.addEventListener("click", async () => flashToFlash());
+document
+	.getElementById("btnFlash")
+	?.addEventListener("click", () => handleFlashClick());
 
 /**
  * GLOBAL GAIN LOGIC
  */
-const globalSlider = document.getElementById("globalGainSlider");
-globalSlider!.addEventListener("change", async (e) => setGlobalGain(e));
+document
+	.getElementById("globalGainSlider")
+	?.addEventListener("change", async (e) => setGlobalGain(e));
 
 /**
- * SLOT LOGIC
+ * SLOT LOGIC — dropdown (still present in DOM for fallback) + A/B buttons
+ * are wired inside fn.ts initState so they survive this file's cleanup.
  */
-const slotSelect = document.getElementById("slotSelect");
-slotSelect?.addEventListener("change", (e) => onSlotChange(e));
+document
+	.getElementById("slotSelect")
+	?.addEventListener("change", (e) => onSlotChange(e));
 
 /**
- * IMPORT/EXPORT LOGIC
+ * IMPORT / EXPORT LOGIC — #btnImport is hidden in the new layout but still
+ * in the DOM; keep it wired so the file input path keeps working.
  */
-const btnExport = document.getElementById("btnExport");
-btnExport!.addEventListener("click", () => exportProfile());
+document
+	.getElementById("btnExport")
+	?.addEventListener("click", () => exportProfile());
 
 const btnImport = document.getElementById("btnImport");
-const fileInput = document.getElementById("fileInput");
-btnImport!.addEventListener("click", () => fileInput!.click());
-fileInput!.addEventListener("change", (e) => importProfile(e));
+const fileInput = document.getElementById("fileInput") as HTMLInputElement | null;
+btnImport?.addEventListener("click", () => fileInput?.click());
+fileInput?.addEventListener("change", (e) => importProfile(e));
+
+/**
+ * UNDO / REDO TOOLBAR BUTTONS (new in pivot layout)
+ */
+document
+	.getElementById("btnUndo")
+	?.addEventListener("click", () => undoAction());
+document
+	.getElementById("btnRedo")
+	?.addEventListener("click", () => redoAction());
+
+/**
+ * PRESET COMMIT BAR (new in pivot layout). Handlers may still be stubs in
+ * fn.ts — dynamic-import with a graceful fallback so nothing crashes.
+ */
+document
+	.getElementById("btnUpdatePreset")
+	?.addEventListener("click", () =>
+		callFnHandler("handleUpdatePreset", "Update preset: not implemented yet."),
+	);
+document
+	.getElementById("btnSaveAsNew")
+	?.addEventListener("click", () =>
+		callFnHandler("handleSaveAsNew", "Save as new preset: not implemented yet."),
+	);
+document
+	.getElementById("btnGetLink")
+	?.addEventListener("click", () =>
+		callFnHandler("handleGetLink", "Get shareable link: not implemented yet."),
+	);
+
+/**
+ * TOP NAV TABS — DSP vs Device Settings. Prefer fn.ts's setActiveNavTab
+ * when it lands; fall back to a simple .active class toggle so the UI is
+ * still usable during the transition.
+ */
+function activateNavTab(which: "dsp" | "device") {
+	import("./fn.ts")
+		.then((mod) => {
+			const fn = (mod as Record<string, unknown>).setActiveNavTab;
+			if (typeof fn === "function") {
+				(fn as (w: "dsp" | "device") => void)(which);
+				return;
+			}
+			toggleNavTabsInline(which);
+		})
+		.catch(() => toggleNavTabsInline(which));
+}
+
+function toggleNavTabsInline(which: "dsp" | "device") {
+	const dspTab = document.getElementById("navTabDsp");
+	const deviceTab = document.getElementById("navTabDevice");
+	dspTab?.classList.toggle("active", which === "dsp");
+	deviceTab?.classList.toggle("active", which === "device");
+}
+
+document
+	.getElementById("navTabDsp")
+	?.addEventListener("click", () => activateNavTab("dsp"));
+document
+	.getElementById("navTabDevice")
+	?.addEventListener("click", () => activateNavTab("device"));
+
+/**
+ * KEYBOARD SHORTCUTS — undo / redo / swap / help. Preserved from the
+ * pre-pivot build; the '?' shortcut replaces the removed header help icon.
+ */
+window.addEventListener("keydown", (e) => {
+	// Ignore while typing in form inputs so we don't hijack text editing.
+	const target = e.target as HTMLElement | null;
+	if (
+		target instanceof HTMLInputElement ||
+		target instanceof HTMLSelectElement ||
+		target instanceof HTMLTextAreaElement
+	) {
+		return;
+	}
+
+	const key = e.key.toLowerCase();
+
+	// Alt+S: swap A ↔ B. Alt avoids conflict with Cmd+S save dialogs.
+	if (e.altKey && key === "s") {
+		e.preventDefault();
+		swapABSlots();
+		return;
+	}
+
+	// "?" opens the keyboard help. On most layouts this arrives as
+	// shift+/, hence the explicit check for the resolved character.
+	if (e.key === "?" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+		e.preventDefault();
+		openKeyboardHelp();
+		return;
+	}
+
+	const mod = e.ctrlKey || e.metaKey;
+	if (!mod) return;
+
+	if (key === "z" && !e.shiftKey) {
+		e.preventDefault();
+		undoAction();
+	} else if ((key === "z" && e.shiftKey) || key === "y") {
+		e.preventDefault();
+		redoAction();
+	}
+});

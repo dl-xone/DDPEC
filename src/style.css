@@ -1,5 +1,234 @@
 @import "tailwindcss";
 
+/* Design tokens — Wave 4.1. Default palette is dark. Light mode flips
+   the same --color-* names via :root[data-theme=light] below; every
+   Tailwind utility generated from these tokens re-binds automatically. */
+@theme {
+	--color-surface-0: #0a0a0c; /* page bg — not absolute black */
+	--color-surface-1: #111113; /* panels */
+	--color-surface-2: #17171a; /* elevated */
+	--color-surface-3: #1f1f23; /* inputs, disabled */
+	--color-surface-4: #26262b; /* hover */
+	--color-border: #26262b;
+	--color-border-strong: #38383d;
+	--color-text-1: #d4d4d8; /* primary — softer than pure white */
+	--color-text-2: #8b8b90; /* secondary */
+	--color-text-3: #6f6f74; /* muted — bumped from #55555a for WCAG AA on dark */
+	--color-accent: #cf4863; /* muted rose — less saturated than #e11d48 */
+	--color-accent-dim: #55222e; /* accent at rest */
+	--color-success: #34a858; /* connect indicator dot — softer green */
+
+	/* Canvas-specific tokens. Kept separate so peq.ts can read them via
+	   getComputedStyle and draw grid / labels in whichever theme is on. */
+	--color-grid-fine: #1d1d21;
+	--color-grid-zero: #2e2e33;
+	--color-grid-label: #55555a;
+	--color-curve-inactive: rgba(220, 220, 225, 0.16);
+	--color-legend-bg: rgba(17, 17, 19, 0.78);
+	--color-legend-border: #26262b;
+	--color-legend-text: #b0b0b5;
+
+	/* Measurement and target curves — softened versions of the originals. */
+	--color-measurement: #e5b850; /* was #fbbf24 */
+	--color-measurement-dim: rgba(229, 184, 80, 0.3);
+	--color-target: #5eb8c4; /* was #22d3ee */
+
+	/* Band-marker tokens — consumed by peq.ts via getComputedStyle. Dark theme. */
+	--color-band-fill: #1e2844;
+	--color-band-number: #ffffff;
+	--color-band-ring: rgba(255, 255, 255, 0.20);
+
+	--font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Light palette — softer greys instead of full white, muted rose accent. */
+:root[data-theme="light"] {
+	color-scheme: light;
+	--color-surface-0: #f5f5f7;
+	--color-surface-1: #eeeef0;
+	--color-surface-2: #e4e4e7;
+	--color-surface-3: #d9d9dc;
+	--color-surface-4: #cbcbcf;
+	--color-border: #dcdce0;
+	--color-border-strong: #b8b8bd;
+	--color-text-1: #2a2a2e;
+	--color-text-2: #60606a;
+	--color-text-3: #72727a; /* was #8e8e93 — bumped slightly darker for AA on light bg */
+	--color-accent: #b8435c;
+	--color-accent-dim: #e8c9d0;
+	--color-success: #2e8b4f;
+	--color-grid-fine: #e0e0e3;
+	--color-grid-zero: #b8b8bc;
+	--color-grid-label: #8e8e93;
+	--color-curve-inactive: rgba(40, 40, 45, 0.2);
+	--color-legend-bg: rgba(255, 255, 255, 0.88);
+	--color-legend-border: #cbcbcf;
+	--color-legend-text: #3a3a3f;
+	--color-measurement: #c99a35;
+	--color-measurement-dim: rgba(201, 154, 53, 0.32);
+	--color-target: #3f8e99;
+
+	/* Band-marker tokens — light-theme overrides of the defaults in @theme. */
+	--color-band-fill: #e2e8f4;
+	--color-band-number: #1e2844;
+	--color-band-ring: rgba(30, 40, 68, 0.20);
+}
+
+:root {
+	color-scheme: dark;
+}
+
+/* Button intents. Deliberately lightweight — no heavy borders or
+   chunky padding. Commit actions (primary) are the one exception;
+   everything else is ghost-style so the canvas stays the hero. */
+@utility btn-primary {
+	@apply px-3.5 py-1.5 rounded text-xs font-semibold text-white transition-all;
+	background: var(--color-accent);
+	letter-spacing: 0.04em;
+}
+@utility btn-ghost {
+	@apply px-2.5 py-1 rounded text-xs transition-colors;
+	background: transparent;
+	color: var(--color-text-2);
+}
+@utility btn-ghost-danger {
+	@apply px-2.5 py-1 rounded text-xs transition-colors;
+	background: transparent;
+	color: var(--color-text-3);
+}
+@utility btn-icon {
+	@apply rounded transition-colors flex items-center justify-center;
+	width: 28px;
+	height: 28px;
+	background: transparent;
+	color: var(--color-text-3);
+}
+/* Legacy aliases. Existing call-sites can migrate gradually. */
+@utility btn-neutral {
+	@apply px-2.5 py-1 rounded text-xs transition-colors;
+	background: transparent;
+	color: var(--color-text-2);
+}
+@utility btn-success {
+	@apply px-3.5 py-1.5 rounded text-xs font-semibold text-white transition-all;
+	background: var(--color-accent);
+	letter-spacing: 0.04em;
+}
+@utility btn-danger {
+	@apply px-2.5 py-1 rounded text-xs transition-colors;
+	background: transparent;
+	color: var(--color-text-3);
+}
+
+button.btn-primary:hover:not(:disabled),
+button.btn-success:hover:not(:disabled) {
+	filter: brightness(1.12);
+}
+button.btn-ghost:hover:not(:disabled),
+button.btn-neutral:hover:not(:disabled),
+button.btn-icon:hover:not(:disabled) {
+	background: var(--color-surface-2);
+	color: var(--color-text-1);
+}
+button.btn-ghost-danger:hover:not(:disabled),
+button.btn-danger:hover:not(:disabled) {
+	background: var(--color-accent-dim);
+	color: var(--color-accent);
+}
+button.btn-primary:disabled,
+button.btn-success:disabled,
+button.btn-ghost:disabled,
+button.btn-neutral:disabled,
+button.btn-ghost-danger:disabled,
+button.btn-danger:disabled,
+button.btn-icon:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+button.btn-primary:focus-visible,
+button.btn-success:focus-visible,
+button.btn-ghost:focus-visible,
+button.btn-neutral:focus-visible,
+button.btn-ghost-danger:focus-visible,
+button.btn-danger:focus-visible,
+button.btn-icon:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+
+/* Tabular EQ numeric inputs — borderless by default, focus underlines
+   in the accent color so the grid stays quiet when nothing is focused. */
+.num-input {
+	@apply w-full rounded px-2 py-1 text-xs font-mono text-text-1;
+	background: var(--color-surface-2);
+	border: 1px solid transparent;
+	text-align: right;
+}
+.num-input:hover {
+	background: var(--color-surface-3);
+}
+.num-input:focus {
+	outline: none;
+	border-color: var(--color-accent);
+	background: var(--color-accent-dim);
+}
+/* Always-visible spinners — reference-style pro-tool density. Affordance is
+   always visible; better for touch + motor-impaired users. */
+.num-input::-webkit-outer-spin-button,
+.num-input::-webkit-inner-spin-button {
+	-webkit-appearance: auto;
+	opacity: 1;
+	margin: 0;
+}
+.num-input {
+	-moz-appearance: auto;
+	appearance: auto;
+}
+
+/* Preset list row */
+.preset-row {
+	@apply flex items-center justify-between px-3 py-2 rounded cursor-pointer text-sm transition-colors;
+	color: var(--color-text-1);
+}
+.preset-row:hover {
+	background: var(--color-surface-3);
+}
+.preset-row.active {
+	border: 1px solid var(--color-accent);
+	color: var(--color-accent);
+}
+
+/* Status pill — quieter, no border, just a tinted bg. */
+.status-pill {
+	@apply inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full text-[11px] font-semibold;
+	background: var(--color-surface-2);
+	color: var(--color-text-2);
+}
+.status-pill .dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--color-text-3);
+}
+.status-pill.connected .dot {
+	background: var(--color-success);
+	box-shadow: 0 0 6px var(--color-success);
+}
+.status-pill.connected {
+	color: var(--color-text-1);
+}
+.status-pill.disconnected {
+	color: var(--color-text-2);
+}
+.status-pill.disconnected .dot {
+	background: #d9a441;
+	box-shadow: 0 0 6px rgba(217, 164, 65, 0.5);
+}
+.status-pill #deviceName:not(:empty)::before {
+	content: " · ";
+	color: var(--color-text-3);
+}
+
 input[type="range"][orient="vertical"] {
 	writing-mode: bt-lr;
 	-webkit-appearance: slider-vertical;
@@ -9,12 +238,12 @@ input[type="range"][orient="vertical"] {
 	cursor: pointer;
 }
 
-/* Toggle switch styles - custom component */
+/* Toggle switch */
 .switch {
 	position: relative;
 	display: inline-block;
-	width: 40px;
-	height: 20px;
+	width: 36px;
+	height: 18px;
 }
 .switch input {
 	opacity: 0;
@@ -28,40 +257,369 @@ input[type="range"][orient="vertical"] {
 	left: 0;
 	right: 0;
 	bottom: 0;
-	background-color: #444;
-	transition: 0.4s;
-	border-radius: 20px;
+	background-color: var(--color-surface-3);
+	transition: 0.3s;
+	border-radius: 18px;
 }
 .slider:before {
 	position: absolute;
 	content: "";
-	height: 14px;
-	width: 14px;
+	height: 12px;
+	width: 12px;
 	left: 3px;
 	bottom: 3px;
-	background-color: white;
-	transition: 0.4s;
+	background-color: var(--color-text-2);
+	transition: 0.3s;
 	border-radius: 50%;
 }
 input:checked + .slider {
-	background-color: #00e676;
+	background-color: var(--color-success);
 }
 input:checked + .slider:before {
-	transform: translateX(20px);
+	transform: translateX(18px);
+	background-color: white;
 }
 
-/* --- Log --- */
-.log-console {
+/* Wordmark */
+.wordmark {
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	letter-spacing: 0.2em;
+	color: var(--color-text-2);
+	text-transform: uppercase;
+	margin: 0;
+}
+.wordmark .accent {
+	color: var(--color-accent);
+}
+.wordmark b {
+	color: var(--color-text-1);
+	font-weight: 600;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		transition-duration: 0.01ms !important;
+	}
+}
+
+/* ----------------------------------------------------------------
+   JDS pivot additions — 2026-04-17
+   ---------------------------------------------------------------- */
+
+/* Outline button — preset-bar actions (Update/Save As New/Get link/Export). */
+@utility btn-outline {
+	@apply inline-flex items-center transition-colors;
+	border: 1px solid var(--color-border);
+	background: transparent;
+	color: var(--color-text-1);
+	padding: 6px 12px;
+	border-radius: 4px;
+	font-size: 11px;
+	letter-spacing: 0.04em;
+	gap: 6px;
+	cursor: pointer;
+}
+button.btn-outline:hover:not(:disabled) {
+	border-color: var(--color-border-strong);
+	background: var(--color-surface-2);
+	color: var(--color-text-1);
+}
+button.btn-outline:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+button.btn-outline:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+.btn-outline svg {
+	width: 12px;
+	height: 12px;
+	opacity: 0.7;
+}
+
+/* Ghost icon button — undo/redo, trash in preset bar. */
+@utility btn-ghost-icon {
+	@apply inline-flex items-center justify-center transition-colors;
+	background: transparent;
+	border: none;
+	color: var(--color-text-3);
+	padding: 6px;
+	cursor: pointer;
+	border-radius: 3px;
+}
+button.btn-ghost-icon:hover:not(:disabled) {
+	color: var(--color-text-1);
+	background: var(--color-surface-2);
+}
+button.btn-ghost-icon:disabled {
+	opacity: 0.35;
+	cursor: not-allowed;
+}
+button.btn-ghost-icon:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+
+/* Top-nav horizontal tab — DSP / Device Settings. */
+.nav-tab {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 14px 16px;
+	font-size: 11px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--color-text-2);
+	font-weight: 600;
+	background: transparent;
+	border: none;
+	cursor: pointer;
+	font-family: inherit;
+}
+.nav-tab:hover {
+	color: var(--color-text-1);
+}
+.nav-tab.active {
+	color: var(--color-text-1);
+}
+.nav-tab.active::after {
+	content: "";
+	position: absolute;
+	left: 12px;
+	right: 12px;
+	bottom: -1px;
+	height: 2px;
+	background: var(--color-accent);
+}
+.nav-tab svg {
+	opacity: 0.7;
+}
+.nav-tab:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+
+/* Segmented-control option — sidebar Mode (Headphone / RCA). */
+.mode-group {
+	display: flex;
+	gap: 0;
+	border-bottom: 1px solid var(--color-border);
+}
+.mode-opt {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 6px;
+	padding: 10px 4px;
+	font-size: 11px;
+	color: var(--color-text-2);
+	cursor: pointer;
+	position: relative;
+	background: transparent;
+	border: none;
+	font-family: inherit;
+}
+.mode-opt:hover {
+	color: var(--color-text-1);
+}
+.mode-opt.active {
+	color: var(--color-text-1);
+}
+.mode-opt.active::after {
+	content: "";
+	position: absolute;
+	left: 20%;
+	right: 20%;
+	bottom: -1px;
+	height: 2px;
+	background: var(--color-accent);
+}
+.mode-opt svg {
+	width: 18px;
+	height: 18px;
+	opacity: 0.8;
+}
+.mode-opt:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+
+/* Sidebar section heading */
+.sidebar-head {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	letter-spacing: 0.22em;
+	color: var(--color-text-3);
+	text-transform: uppercase;
+	font-weight: 600;
+	margin-bottom: 10px;
+}
+
+/* Sidebar preset/action rows (Load External reuses .prow). */
+.prow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px;
+	border-radius: 3px;
+	font-size: 12px;
+	color: var(--color-text-1);
+	cursor: pointer;
+	border: 1px solid transparent;
+	background: transparent;
+	text-align: left;
+	font-family: inherit;
 	width: 100%;
-	max-width: 1100px;
-	height: 80px;
-	background: #000;
-	border: 1px solid var(--border-color);
-	color: #666;
-	font-family: "Courier New", monospace;
-	font-size: 0.7rem;
-	padding: 10px;
-	overflow-y: auto;
-	box-sizing: border-box;
+}
+.prow:hover {
+	background: var(--color-surface-2);
+}
+.prow.active {
+	border-color: var(--color-accent);
+	color: var(--color-accent);
+}
+
+/* Red-outline "Disable EQ" button — sidebar action. */
+.btn-disable {
+	display: block;
+	width: 100%;
 	margin-top: 10px;
+	padding: 6px 10px;
+	border-radius: 3px;
+	border: 1px solid var(--color-accent-dim);
+	background: transparent;
+	color: var(--color-accent);
+	font-size: 11px;
+	text-align: left;
+	cursor: pointer;
+	font-family: inherit;
+}
+.btn-disable:hover {
+	background: var(--color-accent-dim);
+}
+.btn-disable:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+
+/* A/B slot pills — secondary row. */
+.ab-btn {
+	background: transparent;
+	border: none;
+	color: var(--color-text-2);
+	padding: 4px 10px;
+	border-radius: 3px;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	cursor: pointer;
+}
+.ab-btn:hover {
+	color: var(--color-text-1);
+}
+.ab-btn.active {
+	background: var(--color-surface-2);
+	color: var(--color-text-1);
+}
+.ab-btn.swap {
+	color: var(--color-text-3);
+	font-size: 14px;
+	padding: 4px 6px;
+	letter-spacing: 0;
+}
+.ab-btn.swap:hover {
+	color: var(--color-text-1);
+}
+.ab-btn:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+
+/* Bottom-panel tabs — Tabular EQ / Preamp Gain. */
+.bt {
+	padding: 8px 14px;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--color-text-2);
+	border: none;
+	border-bottom: 2px solid transparent;
+	background: transparent;
+	font-weight: 600;
+	cursor: pointer;
+}
+.bt:hover {
+	color: var(--color-text-1);
+}
+.bt.active {
+	color: var(--color-text-1);
+	border-color: var(--color-accent);
+}
+.bt:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+
+/* Collapsible log tray — replaces the always-open console strip. */
+.logtray {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 4px 24px;
+	border-top: 1px solid var(--color-border);
+	background: var(--color-surface-0);
+	font-family: var(--font-mono);
+	font-size: 10px;
+	color: var(--color-text-3);
+	cursor: pointer;
+	user-select: none;
+}
+.logtray:hover {
+	color: var(--color-text-2);
+}
+.logtray .caret {
+	opacity: 0.5;
+	display: inline-block;
+	transition: transform 0.15s ease-out;
+}
+.logtray[aria-expanded="true"] .caret {
+	transform: rotate(90deg);
+}
+.logtray .latest {
+	flex: 1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.logtray:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: -1px;
+}
+
+/* Italic "Preset changed" / "Pending changes" chip. */
+.chip-pending {
+	font-style: italic;
+	font-size: 11px;
+	color: var(--color-text-3);
+}
+
+/* Confirm popover scaffold — used for flash-write confirm anchor. */
+.popover {
+	position: absolute;
+	background: var(--color-surface-2);
+	border: 1px solid var(--color-border);
+	border-radius: 4px;
+	padding: 10px 12px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+	z-index: 50;
 }
