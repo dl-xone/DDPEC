@@ -71,7 +71,13 @@ import {
 	fetchAutoEqFile,
 	fetchAutoEqIndex,
 } from "./autoeq.ts";
-import { applyProfileText } from "./importExport.ts";
+import {
+	applyProfileText,
+	downloadPayload,
+	exportAs,
+	EXPORT_FORMAT_LABELS,
+	type ExportFormat,
+} from "./importExport.ts";
 import {
 	fetchPhoneBook,
 	fetchPhoneFR,
@@ -225,6 +231,8 @@ export function initState() {
 	wireLogClear();
 	wireNavTabs();
 	wireCommitBar();
+	wireViewToggles();
+	wireExportMenu();
 }
 
 // Target-curve picker. Distinct from the measurement loader so the two
@@ -446,6 +454,10 @@ export function renderUI(eqState: EQ) {
 		console.error("EQ Container not found!");
 		return;
 	}
+	// Feature 7 — honour the session-level A/B overlay toggle. "hidden"
+	// suppresses the inactive curve entirely (no ghost line, no delta).
+	const session = getSession();
+	const overlayHidden = session.abOverlay === "hidden";
 	renderPEQ(
 		container,
 		eqState,
@@ -453,14 +465,19 @@ export function renderUI(eqState: EQ) {
 			updateState(index, key, value);
 		},
 		{
-			inactiveBands: getInactiveEq(),
+			inactiveBands: overlayHidden ? null : getInactiveEq(),
 			onAddBand: addBandHandler,
 			onRemoveBand: removeBandHandler,
 			onDeleteBand: deleteBandHandler,
 			getBandCountCap: getBandCountCap,
+			// Delta line depends on the A/B overlay being visible (it
+			// compares active vs inactive — useless if inactive is off).
+			showDelta: !overlayHidden && !!session.showDelta,
+			showPhase: !!session.showPhase,
 		},
 	);
 	updateSlotUI();
+	syncViewToggleButtons();
 }
 
 // Feature 3 — drag-off-canvas delete. Same history + persistence spine as
@@ -1877,6 +1894,163 @@ export function handleDeletePreset() {
 // Re-export so main.ts' `callFnHandler(handleGetLink, ...)` keeps working.
 export function handleGetLink() {
 	void shareCurrentEqLink();
+}
+
+// Feature 7/8 — view-toggle buttons in the preset action bar. Each flips
+// a session flag, persists it, then repaints the canvas. Kept grouped so
+// the user sees "these three buttons control what you see on the graph".
+export function toggleAbOverlay() {
+	const current = getSession().abOverlay;
+	const next: "auto" | "hidden" = current === "hidden" ? "auto" : "hidden";
+	saveSession({ abOverlay: next });
+	renderUI(getEqState());
+	toast(next === "hidden" ? "A/B overlay hidden" : "A/B overlay shown");
+}
+
+export function toggleDelta() {
+	const next = !getSession().showDelta;
+	saveSession({ showDelta: next });
+	renderUI(getEqState());
+	toast(next ? "Δ line on" : "Δ line off");
+}
+
+export function togglePhaseView() {
+	const next = !getSession().showPhase;
+	saveSession({ showPhase: next });
+	renderUI(getEqState());
+	toast(next ? "Phase view on" : "Phase view off");
+}
+
+// Keep the three toggle buttons' visual state (pressed / not pressed) in
+// sync with session flags. Called at the end of every renderUI so session
+// writes from other code paths (e.g. command palette later) still paint.
+function syncViewToggleButtons() {
+	const s = getSession();
+	const setPressed = (id: string, on: boolean) => {
+		const el = document.getElementById(id);
+		if (!el) return;
+		el.classList.toggle("toggle-on", on);
+		el.setAttribute("aria-pressed", on ? "true" : "false");
+	};
+	setPressed("btnToggleAbOverlay", s.abOverlay !== "hidden");
+	setPressed("btnToggleDelta", !!s.showDelta);
+	setPressed("btnTogglePhase", !!s.showPhase);
+	// Feature 9 — update the export button's tooltip with the last-used
+	// format so the click-main-action path doesn't feel like a black box.
+	const exportBtn = document.getElementById("btnExport");
+	if (exportBtn) {
+		const label = EXPORT_FORMAT_LABELS[s.exportFormat];
+		exportBtn.setAttribute(
+			"title",
+			`Export as ${label} (click to change format)`,
+		);
+	}
+}
+
+function wireViewToggles() {
+	document
+		.getElementById("btnToggleAbOverlay")
+		?.addEventListener("click", () => toggleAbOverlay());
+	document
+		.getElementById("btnToggleDelta")
+		?.addEventListener("click", () => toggleDelta());
+	document
+		.getElementById("btnTogglePhase")
+		?.addEventListener("click", () => togglePhaseView());
+}
+
+// Feature 9 — export format dispatcher. Click main button → download with
+// last-used format. Click arrow button → open popover to pick a new
+// format; picking downloads immediately AND persists the choice.
+export function handleExportClick() {
+	const fmt = getSession().exportFormat;
+	runExport(fmt);
+}
+
+function runExport(format: ExportFormat) {
+	try {
+		const payload = exportAs(format);
+		downloadPayload(payload);
+		saveSession({ exportFormat: format });
+		syncViewToggleButtons();
+		toast(`Exported as ${EXPORT_FORMAT_LABELS[format]}`);
+		log(`Exported ${payload.filename} (${EXPORT_FORMAT_LABELS[format]}).`);
+	} catch (err) {
+		log(`Export failed: ${(err as Error).message}`);
+		toast("Export failed");
+	}
+}
+
+// Floating menu anchored under the arrow button. Vanilla DOM (no popover
+// lib). Click-outside and Esc close it. Selecting an item triggers the
+// download + persists the choice.
+function openExportMenu(anchor: HTMLElement) {
+	const existing = document.getElementById("exportMenu");
+	if (existing) {
+		existing.remove();
+		return;
+	}
+	const menu = document.createElement("div");
+	menu.id = "exportMenu";
+	menu.className = "export-menu";
+	const rect = anchor.getBoundingClientRect();
+	menu.style.position = "fixed";
+	menu.style.top = `${rect.bottom + 4}px`;
+	menu.style.right = `${window.innerWidth - rect.right}px`;
+	menu.style.zIndex = "1000";
+
+	const formats: ExportFormat[] = [
+		"json",
+		"rew",
+		"eapo",
+		"wavelet",
+		"camilla",
+		"peace",
+	];
+	for (const fmt of formats) {
+		const item = document.createElement("button");
+		item.type = "button";
+		item.className = "export-menu-item";
+		item.textContent = EXPORT_FORMAT_LABELS[fmt];
+		item.addEventListener("click", () => {
+			menu.remove();
+			runExport(fmt);
+		});
+		menu.appendChild(item);
+	}
+	document.body.appendChild(menu);
+
+	// Dismiss on Esc or click-outside.
+	const dismiss = (e: Event) => {
+		if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+		if (
+			e instanceof MouseEvent &&
+			(menu.contains(e.target as Node) || anchor.contains(e.target as Node))
+		)
+			return;
+		menu.remove();
+		document.removeEventListener("click", dismiss);
+		document.removeEventListener("keydown", dismiss);
+	};
+	// Defer so the click that opened the menu doesn't close it.
+	setTimeout(() => {
+		document.addEventListener("click", dismiss);
+		document.addEventListener("keydown", dismiss);
+	}, 0);
+}
+
+function wireExportMenu() {
+	const main = document.getElementById("btnExport");
+	if (main) {
+		main.addEventListener("click", () => handleExportClick());
+	}
+	const arrow = document.getElementById("btnExportMenu");
+	if (arrow) {
+		arrow.addEventListener("click", (e) => {
+			e.stopPropagation();
+			openExportMenu(arrow);
+		});
+	}
 }
 
 // Build a shareable URL with the current EQ state encoded in the hash.

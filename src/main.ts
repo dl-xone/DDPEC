@@ -14,7 +14,7 @@ import {
 } from "./fn.ts";
 import { initTheme } from "./theme.ts";
 import { setGlobalGain } from "./helpers.ts";
-import { exportProfile, importProfile } from "./importExport.ts";
+import { importProfile } from "./importExport.ts";
 
 export type Band = {
 	index: number;
@@ -92,12 +92,10 @@ document
 
 /**
  * IMPORT / EXPORT LOGIC — #btnImport is hidden in the new layout but still
- * in the DOM; keep it wired so the file input path keeps working.
+ * in the DOM; keep it wired so the file input path keeps working. Export
+ * is now wired inside fn.ts (wireExportMenu) because it needs access to
+ * session state (last-used format) and toasts.
  */
-document
-	.getElementById("btnExport")
-	?.addEventListener("click", () => exportProfile());
-
 const btnImport = document.getElementById("btnImport");
 const btnImportJson = document.getElementById("btnImportJson");
 const fileInput = document.getElementById("fileInput") as HTMLInputElement | null;

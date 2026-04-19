@@ -45,6 +45,16 @@
     <button type="button" id="btnRedo" class="btn-ghost-icon" title="Redo (Shift+Cmd+Z)" aria-label="Redo">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 7v6h-6"/><path d="M20.49 15A9 9 0 1 1 18.36 5.64L21 8"/></svg>
     </button>
+    <span class="view-toggle-sep" aria-hidden="true"></span>
+    <button type="button" id="btnToggleAbOverlay" class="btn-ghost-icon" title="Toggle A/B overlay" aria-label="Toggle A/B overlay" aria-pressed="true">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>
+    </button>
+    <button type="button" id="btnToggleDelta" class="btn-ghost-icon" title="Toggle Δ (A − B) line" aria-label="Toggle delta line" aria-pressed="false">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="12 4 21 20 3 20 12 4"/></svg>
+    </button>
+    <button type="button" id="btnTogglePhase" class="btn-ghost-icon" title="Toggle phase response" aria-label="Toggle phase response" aria-pressed="false">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12c3-6 7-6 9 0s6 6 9 0"/></svg>
+    </button>
     <div id="presetTitle" class="flex items-center gap-2.5 text-sm font-semibold text-text-1">
       <span id="presetStar" class="text-[#e5b850]">★</span>
       <span id="presetName">Untitled</span>
@@ -61,7 +71,12 @@
       Get link
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
     </button>
-    <button type="button" id="btnExport" class="btn-outline">Export</button>
+    <div class="export-split">
+      <button type="button" id="btnExport" class="btn-outline" title="Export">Export</button>
+      <button type="button" id="btnExportMenu" class="btn-outline export-arrow" title="Choose export format" aria-label="Choose export format" aria-haspopup="menu">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+    </div>
   </div>
 </div>
 

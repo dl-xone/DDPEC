@@ -118,6 +118,37 @@ describe("session", () => {
 		expect(parsed.logTrayExpanded).toBe(true);
 	});
 
+	it("Phase 2 toggles default correctly and roundtrip through storage", () => {
+		const s = getSession();
+		expect(s.abOverlay).toBe("auto");
+		expect(s.showDelta).toBe(false);
+		expect(s.showPhase).toBe(false);
+		expect(s.exportFormat).toBe("json");
+
+		saveSession({
+			abOverlay: "hidden",
+			showDelta: true,
+			showPhase: true,
+			exportFormat: "eapo",
+		});
+		flushSession();
+		resetSessionForTest();
+		const reloaded = getSession();
+		expect(reloaded.abOverlay).toBe("hidden");
+		expect(reloaded.showDelta).toBe(true);
+		expect(reloaded.showPhase).toBe(true);
+		expect(reloaded.exportFormat).toBe("eapo");
+	});
+
+	it("rejects invalid exportFormat values on load", () => {
+		store.set(
+			"ddpec.session",
+			JSON.stringify({ exportFormat: "mystery" }),
+		);
+		const loaded = loadSession();
+		expect(loaded.exportFormat).toBeUndefined();
+	});
+
 	it("getSession picks up previously persisted values on cold start", () => {
 		store.set(
 			"ddpec.session",

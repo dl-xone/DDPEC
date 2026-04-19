@@ -697,3 +697,81 @@ button.btn-ghost-icon:focus-visible {
 	text-align: center;
 	line-height: 1.5;
 }
+
+/* Feature 7/8 — view-toggle buttons share the ghost-icon surface but pick
+   up an accent wash when active so the user can tell at a glance which
+   overlays are on. Kept subtle so the action bar stays quiet. */
+.view-toggle-sep {
+	display: inline-block;
+	width: 1px;
+	height: 18px;
+	background: var(--color-border);
+	margin: 0 2px;
+}
+button.btn-ghost-icon.toggle-on {
+	color: var(--color-accent);
+	background: var(--color-accent-dim);
+}
+button.btn-ghost-icon.toggle-on:hover:not(:disabled) {
+	color: var(--color-accent);
+	background: var(--color-accent-dim);
+}
+
+/* Feature 9 — split export button. Main action sits flush with a small
+   arrow button that opens the format picker. */
+.export-split {
+	display: inline-flex;
+	align-items: stretch;
+	gap: 0;
+}
+.export-split .btn-outline {
+	border-top-right-radius: 0;
+	border-bottom-right-radius: 0;
+}
+.export-split .export-arrow {
+	border-top-left-radius: 0;
+	border-bottom-left-radius: 0;
+	padding-left: 6px;
+	padding-right: 6px;
+	margin-left: -1px;
+}
+.export-menu {
+	background: var(--color-surface-2);
+	border: 1px solid var(--color-border-strong);
+	border-radius: 4px;
+	padding: 4px 0;
+	min-width: 160px;
+	box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+	display: flex;
+	flex-direction: column;
+}
+.export-menu-item {
+	background: transparent;
+	border: none;
+	color: var(--color-text-1);
+	padding: 7px 14px;
+	font-size: 12px;
+	text-align: left;
+	cursor: pointer;
+	font-family: var(--font-mono);
+}
+.export-menu-item:hover {
+	background: var(--color-surface-4);
+	color: var(--color-text-1);
+}
+.export-menu-item:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: -1px;
+}
+
+/* Feature 7/8 — canvas tokens for the delta (purple) and phase (teal)
+   curves. Separate names so themes can tune them without stepping on the
+   primary accent/target palette. Light theme override follows. */
+:root {
+	--color-delta: #8e7cc3;
+	--color-phase: #7ac7a8;
+}
+:root[data-theme="light"] {
+	--color-delta: #7560b0;
+	--color-phase: #3d8a6f;
+}

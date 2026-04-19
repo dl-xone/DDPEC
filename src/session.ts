@@ -8,6 +8,14 @@
 export type NavTab = "dsp" | "device";
 export type BottomPanelTab = "tabular" | "preamp";
 export type SlotName = "A" | "B";
+export type AbOverlayMode = "auto" | "hidden";
+export type ExportFormat =
+	| "json"
+	| "rew"
+	| "eapo"
+	| "wavelet"
+	| "camilla"
+	| "peace";
 
 export interface SessionState {
 	activeSlot: SlotName;
@@ -23,10 +31,31 @@ export interface SessionState {
 	// JDS pivot 2026-04-17: user preference — try silent auto-reconnect on
 	// boot using the granted-permissions set (no chooser prompt).
 	autoReconnect: boolean;
+	// Feature 7 — A vs B overlay visibility. "auto" shows the inactive-slot
+	// curve on the canvas; "hidden" suppresses it. Toggle lives in the
+	// preset action bar (btnToggleAbOverlay).
+	abOverlay: AbOverlayMode;
+	// Feature 7 — optional delta line (active − inactive in dB). Off by
+	// default because it doubles the curve count on the canvas.
+	showDelta: boolean;
+	// Feature 8 — phase-response overlay. Off by default.
+	showPhase: boolean;
+	// Feature 9 — last-used export format. Clicking the main export button
+	// re-runs whatever format the user picked most recently.
+	exportFormat: ExportFormat;
 }
 
 const STORAGE_KEY = "ddpec.session";
 const DEBOUNCE_MS = 200;
+
+const VALID_EXPORT_FORMATS: readonly ExportFormat[] = [
+	"json",
+	"rew",
+	"eapo",
+	"wavelet",
+	"camilla",
+	"peace",
+];
 
 const DEFAULTS: SessionState = {
 	activeSlot: "A",
@@ -37,6 +66,10 @@ const DEFAULTS: SessionState = {
 	selectedPresetId: null,
 	lastDeviceKey: null,
 	autoReconnect: true,
+	abOverlay: "auto",
+	showDelta: false,
+	showPhase: false,
+	exportFormat: "json",
 };
 
 let current: SessionState = { ...DEFAULTS };
@@ -63,6 +96,15 @@ function sanitize(raw: unknown): Partial<SessionState> {
 	if (typeof o.lastDeviceKey === "string" || o.lastDeviceKey === null)
 		out.lastDeviceKey = o.lastDeviceKey as string | null;
 	if (typeof o.autoReconnect === "boolean") out.autoReconnect = o.autoReconnect;
+	if (o.abOverlay === "auto" || o.abOverlay === "hidden")
+		out.abOverlay = o.abOverlay;
+	if (typeof o.showDelta === "boolean") out.showDelta = o.showDelta;
+	if (typeof o.showPhase === "boolean") out.showPhase = o.showPhase;
+	if (
+		typeof o.exportFormat === "string" &&
+		(VALID_EXPORT_FORMATS as readonly string[]).includes(o.exportFormat)
+	)
+		out.exportFormat = o.exportFormat as ExportFormat;
 	return out;
 }
 

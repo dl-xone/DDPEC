@@ -151,6 +151,30 @@ export function magnitudeDb(
 	return 10 * Math.log10(magSq);
 }
 
+// Evaluate the biquad phase response (in radians) at a given frequency.
+// Mirrors `magnitudeDb`: evaluate the transfer function at z = e^{jω} by
+// substituting z^{-k} = cos(kω) - j·sin(kω). Phase = arg(N) - arg(D).
+// Result is wrapped to (-π, π]; callers that sum across bands should
+// unwrap after summation.
+export function phaseRad(
+	coeffs: BiquadCoeffs,
+	freq: number,
+	sampleRate: number,
+): number {
+	const w = (2 * Math.PI * freq) / sampleRate;
+	const cos1 = Math.cos(w);
+	const cos2 = Math.cos(2 * w);
+	const sin1 = Math.sin(w);
+	const sin2 = Math.sin(2 * w);
+
+	const numRe = coeffs.b0 + coeffs.b1 * cos1 + coeffs.b2 * cos2;
+	const numIm = -(coeffs.b1 * sin1 + coeffs.b2 * sin2);
+	const denRe = 1 + coeffs.a1 * cos1 + coeffs.a2 * cos2;
+	const denIm = -(coeffs.a1 * sin1 + coeffs.a2 * sin2);
+
+	return Math.atan2(numIm, numRe) - Math.atan2(denIm, denRe);
+}
+
 // Convert a normalized biquad into the 5-coefficient protocol form used
 // by both Savitech and Moondrop firmwares. The a1/a2 sign flip encodes
 // the direct-form difference equation the DSP executes.

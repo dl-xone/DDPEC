@@ -1,5 +1,10 @@
 import { SAMPLE_RATE } from "./constants.ts";
-import { computeBiquad, magnitudeDb, typeHasGain } from "./dsp/biquad.ts";
+import {
+	computeBiquad,
+	magnitudeDb,
+	phaseRad,
+	typeHasGain,
+} from "./dsp/biquad.ts";
 import type { Band } from "./main.ts";
 import { measurementDbAt, targetDbAt } from "./measurements.ts";
 import peqTemplate from "./peq.template.html?raw";
@@ -42,6 +47,11 @@ function themeColor(name: string, fallback: string): string {
  */
 let localBands: Band[] = [];
 let inactiveBands: Band[] | null = null;
+// Feature 7/8 — canvas-overlay toggles. Set on each `renderPEQ` call from
+// the session-state values. Local cache avoids reaching into session on
+// every frame of a drag.
+let showDelta = false;
+let showPhase = false;
 // selectedIndex tracks a band by its *hardware slot* (band.index) so that
 // re-sorting the display after a frequency edit keeps the same band
 // highlighted, rather than jumping to whatever band is now at the old
@@ -428,6 +438,108 @@ function drawCurve(c: CanvasRenderingContext2D, width: number, height: number) {
 	}
 }
 
+// Feature 7 — delta line (active − inactive) in dB. Scaled so ±10 dB maps
+// to ±20% of the chart height: drawn relative to the 0 dB axis to read as
+// a "delta indicator" rather than competing with the main EQ curve.
+function drawDelta(
+	c: CanvasRenderingContext2D,
+	width: number,
+	height: number,
+) {
+	if (!inactiveBands) return;
+	const accent = themeColor("--color-delta", "#8e7cc3");
+	const zeroY = gainToY(0, height);
+	const chartH = height - 2 * CONFIG.padding;
+	// ±10 dB → ±20% of chart height, so 1 dB ≈ 2% of chart height in pixels.
+	const dbToPx = (chartH * 0.2) / 10;
+	const activeCoeffs = localBands.map((b) => computeBiquad(b, SAMPLE_RATE));
+	const inactiveCoeffs = inactiveBands.map((b) => computeBiquad(b, SAMPLE_RATE));
+	const startX = CONFIG.padding;
+	const endX = width - CONFIG.padding;
+	c.save();
+	c.beginPath();
+	c.strokeStyle = accent;
+	c.lineWidth = 1;
+	for (let i = 0; i <= endX - startX; i++) {
+		const x = startX + i;
+		const freq = xToFreq(x, width);
+		const delta = getMagnitude(freq, activeCoeffs) - getMagnitude(freq, inactiveCoeffs);
+		const clampedDelta = Math.max(-20, Math.min(20, delta));
+		const y = zeroY - clampedDelta * dbToPx;
+		if (i === 0) c.moveTo(x, y);
+		else c.lineTo(x, y);
+	}
+	c.stroke();
+	c.restore();
+}
+
+// Feature 8 — summed phase response. Walks pixel columns, sums per-band
+// phase, unwraps left-to-right so adjacent columns don't jump by 2π, and
+// maps ±π to ±0.5 of the pixel height around the canvas vertical middle.
+function drawPhase(
+	c: CanvasRenderingContext2D,
+	width: number,
+	height: number,
+) {
+	const enabled = localBands.filter((b) => b.enabled);
+	const coeffs = enabled.map((b) => computeBiquad(b, SAMPLE_RATE));
+	const startX = CONFIG.padding;
+	const endX = width - CONFIG.padding;
+	const midY = height / 2;
+	const halfH = height / 2 - CONFIG.padding;
+	const color = themeColor("--color-phase", "#7ac7a8");
+
+	c.save();
+	c.beginPath();
+	c.strokeStyle = color;
+	c.lineWidth = 1.5;
+	c.setLineDash([5, 4]);
+
+	let last: number | null = null;
+	for (let i = 0; i <= endX - startX; i++) {
+		const x = startX + i;
+		const freq = xToFreq(x, width);
+		let p = 0;
+		for (const co of coeffs) p += phaseRad(co, freq, SAMPLE_RATE);
+		if (last !== null) {
+			// Minimum-distance unwrap: pick the 2π multiple that keeps us
+			// closest to the previous column's value. Prevents the jump
+			// from appearing when per-band phases roll past ±π.
+			const k = Math.round((last - p) / (2 * Math.PI));
+			p += k * 2 * Math.PI;
+		}
+		last = p;
+		// Clamp to ±π for display so large unwrapped values don't run off
+		// the chart. Users reading a second-order EQ rarely need > ±π; at
+		// the extreme we cap so the line stays visible.
+		const clamped = Math.max(-Math.PI, Math.min(Math.PI, p));
+		const y = midY - (clamped / Math.PI) * halfH;
+		if (i === 0) c.moveTo(x, y);
+		else c.lineTo(x, y);
+	}
+	c.stroke();
+	c.restore();
+}
+
+// Feature 8 — right-side "±π" scale labels when phase is on. Drawn so
+// users can read the phase scale independently of the dB axis on the
+// left. Keep small and dim so they don't steal attention.
+function drawPhaseScale(
+	c: CanvasRenderingContext2D,
+	width: number,
+	height: number,
+) {
+	const label = themeColor("--color-grid-label", "#5a5a5f");
+	c.save();
+	c.fillStyle = label;
+	c.font = "10px ui-monospace, monospace";
+	c.textAlign = "left";
+	const rightX = width - CONFIG.padding + 6;
+	c.fillText("+π", rightX, CONFIG.padding + 4);
+	c.fillText("−π", rightX, height - CONFIG.padding + 2);
+	c.restore();
+}
+
 function drawHandles(
 	c: CanvasRenderingContext2D,
 	width: number,
@@ -520,6 +632,8 @@ function drawLegend(
 	const plateBorder = themeColor("--color-legend-border", "#26262b");
 	const plateText = themeColor("--color-legend-text", "#b0b0b5");
 
+	const deltaCol = themeColor("--color-delta", "#8e7cc3");
+	const phaseCol = themeColor("--color-phase", "#7ac7a8");
 	const items: Array<{ label: string; color: string; dashed?: boolean }> = [
 		{ label: `EQ (${inactiveBands ? "active" : "slot A"})`, color: accent },
 	];
@@ -531,6 +645,12 @@ function drawLegend(
 	}
 	if (targetDbAt(1000) !== null) {
 		items.push({ label: "Target", color: target, dashed: true });
+	}
+	if (showDelta && inactiveBands) {
+		items.push({ label: "Δ (A − B)", color: deltaCol });
+	}
+	if (showPhase) {
+		items.push({ label: "Phase (rad)", color: phaseCol, dashed: true });
 	}
 	if (items.length < 2) return;
 
@@ -579,6 +699,11 @@ function draw() {
 	drawGrid(ctx, width, height);
 	drawQLines(ctx, width, height);
 	drawCurve(ctx, width, height);
+	if (showDelta) drawDelta(ctx, width, height);
+	if (showPhase) {
+		drawPhase(ctx, width, height);
+		drawPhaseScale(ctx, width, height);
+	}
 	drawHandles(ctx, width, height);
 	drawLegend(ctx, width, height);
 }
@@ -850,6 +975,10 @@ export interface RenderPEQOptions {
 	// (not hardware slot) of the band that was dragged past the canvas
 	// bounds. The caller handles snapshot + removal + rerender.
 	onDeleteBand?: (arrayIdx: number) => void;
+	// Feature 7 — render the delta (active − inactive) line in dB.
+	showDelta?: boolean;
+	// Feature 8 — render the summed-phase response.
+	showPhase?: boolean;
 }
 
 export function renderPEQ(
@@ -868,6 +997,8 @@ export function renderPEQ(
 	onRemoveBandCallback = options.onRemoveBand ?? null;
 	onDeleteBandCallback = options.onDeleteBand ?? null;
 	getBandCountCapCallback = options.getBandCountCap ?? null;
+	showDelta = options.showDelta ?? false;
+	showPhase = options.showPhase ?? false;
 
 	if (isFirstRender) {
 		const parsed = new DOMParser().parseFromString(peqTemplate, "text/html");

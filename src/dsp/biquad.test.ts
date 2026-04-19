@@ -3,6 +3,7 @@ import type { Band } from "../main.ts";
 import {
 	computeBiquad,
 	magnitudeDb,
+	phaseRad,
 	toProtocolCoeffs,
 	toQ30Bytes,
 } from "./biquad.ts";
@@ -99,6 +100,45 @@ describe("computeBiquad", () => {
 		expect(magnitudeDb(c, 1000, SR)).toBeCloseTo(0, 1);
 		expect(magnitudeDb(c, 100, SR)).toBeLessThan(-10);
 		expect(magnitudeDb(c, 10000, SR)).toBeLessThan(-10);
+	});
+});
+
+describe("phaseRad", () => {
+	// RBJ peaking filter is symmetric around Fc and the numerator/denominator
+	// phases cancel out at center — phase is ~0 there regardless of gain.
+	it("peaking filter has ~0 phase at Fc", () => {
+		const c = computeBiquad(band({ freq: 1000, gain: 6, q: 1 }), SR);
+		expect(phaseRad(c, 1000, SR)).toBeCloseTo(0, 3);
+	});
+
+	// Low shelf at Fc has a small non-zero phase; main test is that it's
+	// near zero (within ~0.5 rad) — we don't pin an exact value because
+	// RBJ low-shelf phase-at-corner depends on Q and gain.
+	it("low shelf has phase near 0 at Fc", () => {
+		const c = computeBiquad(
+			band({ freq: 200, gain: 6, q: Math.SQRT1_2, type: "LSQ" }),
+			SR,
+		);
+		const p = phaseRad(c, 200, SR);
+		expect(Math.abs(p)).toBeLessThan(0.6);
+	});
+
+	// Q=0.707 high-pass: phase at Fc is +π/2 (90° leading) by RBJ theory.
+	it("high-pass (Q=0.707) has phase ~π/2 at Fc", () => {
+		const c = computeBiquad(
+			band({ freq: 1000, gain: 0, q: Math.SQRT1_2, type: "HPQ" }),
+			SR,
+		);
+		expect(phaseRad(c, 1000, SR)).toBeCloseTo(Math.PI / 2, 1);
+	});
+
+	// Q=0.707 low-pass: phase at Fc is -π/2 (90° lagging) by RBJ theory.
+	it("low-pass (Q=0.707) has phase ~-π/2 at Fc", () => {
+		const c = computeBiquad(
+			band({ freq: 1000, gain: 0, q: Math.SQRT1_2, type: "LPQ" }),
+			SR,
+		);
+		expect(phaseRad(c, 1000, SR)).toBeCloseTo(-Math.PI / 2, 1);
 	});
 });
 
