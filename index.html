@@ -126,12 +126,67 @@
       <div class="flex flex-col gap-1">
         <button type="button" id="btnTarget" class="prow">Target curve…</button>
         <button type="button" id="btnMeasurement" class="prow">FR overlay…</button>
+        <button type="button" id="btnImportJson" class="prow">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Import JSON preset…
+        </button>
         <button type="button" id="btnBrowseAutoEq" class="prow">AutoEQ database…</button>
         <button type="button" id="btnBrowseSquig" class="prow">squig.link…</button>
       </div>
     </section>
   </aside>
 </main>
+
+<!-- Device Settings pane — rendered when #navTabDevice is active. Hidden by default. -->
+<section id="deviceSettingsPane" class="hidden flex-1 overflow-y-auto px-6 py-4 gap-6 flex-col">
+  <div class="max-w-[720px] w-full flex flex-col gap-8">
+
+    <section>
+      <h3 class="sidebar-head">Theme</h3>
+      <div class="flex flex-col gap-1.5">
+        <label class="radio-row"><input type="radio" name="themePref" value="light"/><span>Light</span></label>
+        <label class="radio-row"><input type="radio" name="themePref" value="dark"/><span>Dark</span></label>
+        <label class="radio-row"><input type="radio" name="themePref" value="system"/><span>Follow system preference</span></label>
+      </div>
+    </section>
+
+    <section>
+      <h3 class="sidebar-head">Device</h3>
+      <div id="deviceInfoBox" class="flex flex-col gap-1.5 text-xs text-text-2">
+        <div id="deviceInfoEmpty">No device connected.</div>
+        <div id="deviceInfoRows" class="hidden flex-col gap-1">
+          <div><span class="text-text-3">Product:</span> <span id="deviceInfoName" class="text-text-1"></span></div>
+          <div><span class="text-text-3">Vendor / Product ID:</span> <span id="deviceInfoIds" class="text-text-1 font-mono"></span></div>
+          <div><span class="text-text-3">Firmware:</span> <span id="fwVersion" class="text-text-1 font-mono"></span></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h3 class="sidebar-head">Connection</h3>
+      <div class="flex items-center justify-between gap-4">
+        <label class="flex items-center gap-3 text-xs text-text-1">
+          <span class="switch" title="Auto-reconnect">
+            <input type="checkbox" id="autoReconnectSwitch" checked />
+            <span class="slider"></span>
+          </span>
+          <span>Auto-reconnect on load</span>
+        </label>
+        <button type="button" id="btnManualDisconnect" class="btn-ghost">Disconnect device</button>
+      </div>
+    </section>
+
+    <section>
+      <h3 class="sidebar-head">Test signals</h3>
+      <button type="button" id="btnOpenSignals" class="btn-ghost self-start">Open test signal generator…</button>
+    </section>
+
+    <section>
+      <h3 class="sidebar-head">Danger zone</h3>
+      <button type="button" id="btnFactoryReset" class="danger-zone-button self-start">Reset all EQ slots to defaults</button>
+    </section>
+  </div>
+</section>
 
 <!-- Commit bar — wraps Sync/Flash so it can be hidden when clean -->
 <div id="commitBar" class="flex items-center justify-end gap-2.5 px-6 py-3 border-t border-border">
@@ -145,7 +200,10 @@
   <span id="logTrayCaret" class="caret">▸</span>
   <span id="logTrayLatest" class="latest">Ready to connect...</span>
 </div>
-<div id="logConsole" class="log-console px-6 py-2 text-[10px] font-mono text-text-3 overflow-y-auto max-h-[120px] border-t border-border hidden">Ready to connect...</div>
+<div id="logConsole" class="log-console px-6 py-2 text-[10px] font-mono text-text-3 overflow-y-auto max-h-[120px] border-t border-border hidden">
+  <button type="button" id="btnLogClear" class="log-clear" title="Clear log">Clear</button>
+  Ready to connect...
+</div>
 
 <script type="module" src="/src/main.ts"></script>
 </body>

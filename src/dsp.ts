@@ -15,7 +15,7 @@ import {
 	padSavitech,
 } from "./dsp/encoders.ts";
 import { renderUI, setGlobalGain } from "./fn.ts";
-import { delay, log } from "./helpers.ts";
+import { delay, log, updateGlobalGainUI } from "./helpers.ts";
 import { confirmModal } from "./modal.ts";
 import {
 	getActiveConfig,
@@ -23,6 +23,8 @@ import {
 	getDevice,
 	getEqState,
 	getGlobalGainState,
+	isEqEnabled,
+	setGlobalGainState,
 } from "./state.ts";
 import type { Band } from "./main.ts";
 
@@ -121,7 +123,10 @@ export function setupListener(device: HIDDevice) {
 			versionEl!.innerText = `FW: ${ver}`;
 		} else if (cmd === CMD_SAVI.GAIN) {
 			const gain = new Int8Array([data[4]])[0];
-			setGlobalGain(gain);
+			// Readback path — update state + UI silently so the commit bar
+			// doesn't pop on connect.
+			setGlobalGainState(gain, { silent: true });
+			updateGlobalGainUI(gain);
 		} else if (cmd === CMD_SAVI.PEQ && data.byteLength >= 34) {
 			const idx = data[4];
 			if (idx < eqState.length) {
@@ -303,7 +308,11 @@ export async function writeBand(
 	band: Band,
 	protocol: Protocol,
 ) {
-	const effectiveGain = band.enabled ? band.gain : 0;
+	// JDS pivot 2026-04-17: when EQ is globally bypassed, write neutral
+	// (gain = 0) for every band so the device produces a flat response.
+	// Band state is NOT mutated — re-enabling the EQ and re-syncing writes
+	// the real gain values back.
+	const effectiveGain = !isEqEnabled() || !band.enabled ? 0 : band.gain;
 
 	if (protocol === "FIIO") {
 		await writeBandFiio(device, band, effectiveGain);

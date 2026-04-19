@@ -3,6 +3,7 @@ import { computeBiquad, magnitudeDb } from "./dsp/biquad.ts";
 import type { Band } from "./main.ts";
 import { measurementDbAt, targetDbAt } from "./measurements.ts";
 import peqTemplate from "./peq.template.html?raw";
+import { isEqEnabled } from "./state.ts";
 
 /**
  * CONFIG & CONSTANTS
@@ -348,6 +349,8 @@ function drawCurve(c: CanvasRenderingContext2D, width: number, height: number) {
 		"rgba(229,184,80,0.3)",
 	);
 
+	const bypassed = !isEqEnabled();
+
 	// Target curve — dashed goal line (if loaded).
 	drawTarget(c, width, height);
 
@@ -356,8 +359,9 @@ function drawCurve(c: CanvasRenderingContext2D, width: number, height: number) {
 		stroke: measurementDim,
 		lineWidth: 2,
 	});
-	// Predicted FR-after-EQ.
-	drawMeasurement(c, width, height, localBands, {
+	// Predicted FR-after-EQ. Bypassed → show the raw measurement only by
+	// passing null so the EQ contribution is zeroed.
+	drawMeasurement(c, width, height, bypassed ? null : localBands, {
 		stroke: measurement,
 		lineWidth: 2,
 	});
@@ -369,12 +373,32 @@ function drawCurve(c: CanvasRenderingContext2D, width: number, height: number) {
 			lineWidth: 1.5,
 		});
 	}
-	// Active slot curve — the softened red hero line.
-	drawCurveFor(c, width, height, localBands, {
-		stroke: accent,
-		lineWidth: 2.5,
-		shadowColor: "rgba(207, 72, 99, 0.25)",
-	});
+	if (bypassed) {
+		// Bypassed: draw the EQ curve in a muted color so the user can still
+		// see what their tuning would do, plus a subtle horizontal line at
+		// 0 dB indicating the effective output.
+		drawCurveFor(c, width, height, localBands, {
+			stroke: inactive,
+			lineWidth: 1.5,
+		});
+		const zeroY = gainToY(0, height);
+		c.save();
+		c.strokeStyle = inactive;
+		c.setLineDash([4, 4]);
+		c.lineWidth = 1;
+		c.beginPath();
+		c.moveTo(CONFIG.padding, zeroY);
+		c.lineTo(width - CONFIG.padding, zeroY);
+		c.stroke();
+		c.restore();
+	} else {
+		// Active slot curve — the softened red hero line.
+		drawCurveFor(c, width, height, localBands, {
+			stroke: accent,
+			lineWidth: 2.5,
+			shadowColor: "rgba(207, 72, 99, 0.25)",
+		});
+	}
 }
 
 function drawHandles(
@@ -388,6 +412,12 @@ function drawHandles(
 	const bandRing = themeColor("--color-band-ring", "rgba(255,255,255,0.35)");
 	const surfaceDisabled = themeColor("--color-surface-3", "#2a2a2f");
 	const text3 = themeColor("--color-text-3", "#5a5a5f");
+
+	// Bypassed: band circles still draw (so drag-editing remains possible)
+	// but de-emphasized at 0.45 alpha so the canvas reads as neutral.
+	const bypassed = !isEqEnabled();
+	c.save();
+	if (bypassed) c.globalAlpha = 0.45;
 
 	// Handle numbers follow the sorted display order so they match the
 	// tabular editor's "Band N" labels. Lowest-freq band is #1.
@@ -423,6 +453,7 @@ function drawHandles(
 		c.fillText(String(sortedPos + 1), x, y + 0.5);
 	});
 	c.textBaseline = "alphabetic";
+	c.restore();
 }
 
 function drawLegend(

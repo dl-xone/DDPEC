@@ -20,6 +20,9 @@ export interface SessionState {
 	// Not PII: no serial number. Used to disambiguate when multiple
 	// previously-granted devices happen to be plugged in at once.
 	lastDeviceKey: string | null;
+	// JDS pivot 2026-04-17: user preference — try silent auto-reconnect on
+	// boot using the granted-permissions set (no chooser prompt).
+	autoReconnect: boolean;
 }
 
 const STORAGE_KEY = "ddpec.session";
@@ -33,6 +36,7 @@ const DEFAULTS: SessionState = {
 	logTrayExpanded: false,
 	selectedPresetId: null,
 	lastDeviceKey: null,
+	autoReconnect: true,
 };
 
 let current: SessionState = { ...DEFAULTS };
@@ -58,6 +62,7 @@ function sanitize(raw: unknown): Partial<SessionState> {
 		out.selectedPresetId = o.selectedPresetId as string | null;
 	if (typeof o.lastDeviceKey === "string" || o.lastDeviceKey === null)
 		out.lastDeviceKey = o.lastDeviceKey as string | null;
+	if (typeof o.autoReconnect === "boolean") out.autoReconnect = o.autoReconnect;
 	return out;
 }
 

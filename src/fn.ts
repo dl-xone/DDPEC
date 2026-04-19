@@ -35,6 +35,11 @@ import {
 } from "./measurements.ts";
 import { TARGETS } from "./targets.ts";
 import {
+	getThemePreference,
+	setTheme,
+	type ThemePreference,
+} from "./theme.ts";
+import {
 	confirmModal,
 	customModal,
 	errorModal,
@@ -215,6 +220,7 @@ export function initState() {
 	wireEqDisable();
 	wireBottomPanelTabs();
 	wireLogTray();
+	wireLogClear();
 	wireNavTabs();
 	wireCommitBar();
 }
@@ -395,6 +401,7 @@ function handleDeviceLost() {
 	enableControls(false);
 	renderUI(getEqState());
 	updateHistoryButtons();
+	refreshDeviceInfoUI();
 
 	if (wasConnected) log("Device disconnected.");
 }
@@ -804,23 +811,30 @@ export async function handleFlashClick() {
 	if (getDevice()) setStatusWord("Connected");
 }
 
-// JDS pivot — popover anchored to the Save-to-flash button. Resolves true
-// when the user confirms, false on cancel / Escape / outside-click.
-// Inline rather than a separate helper file to keep the pivot scoped.
-function confirmFlashPopover(anchor: HTMLElement): Promise<boolean> {
+// JDS pivot — generic anchored confirm popover. Used by the flash-write
+// flow and by the factory-reset action in Device Settings. Resolves true
+// on confirm, false on cancel / Escape / outside-click.
+export function confirmPopover(opts: {
+	anchor: HTMLElement;
+	message: string;
+	confirmLabel?: string;
+	cancelLabel?: string;
+}): Promise<boolean> {
+	const { anchor, message } = opts;
+	const confirmLabel = opts.confirmLabel ?? "Confirm";
+	const cancelLabel = opts.cancelLabel ?? "Cancel";
 	return new Promise((resolve) => {
 		const pop = document.createElement("div");
 		pop.className = "popover";
 		pop.setAttribute("role", "dialog");
-		pop.setAttribute("aria-label", "Confirm write to flash");
+		pop.setAttribute("aria-label", confirmLabel);
 
 		const msg = document.createElement("div");
-		msg.textContent =
-			"Write to device flash? This persists across power cycles.";
+		msg.textContent = message;
 		msg.style.fontSize = "12px";
 		msg.style.color = "var(--color-text-1)";
 		msg.style.marginBottom = "10px";
-		msg.style.maxWidth = "240px";
+		msg.style.maxWidth = "260px";
 		pop.appendChild(msg);
 
 		const row = document.createElement("div");
@@ -831,19 +845,17 @@ function confirmFlashPopover(anchor: HTMLElement): Promise<boolean> {
 		const cancel = document.createElement("button");
 		cancel.type = "button";
 		cancel.className = "btn-ghost";
-		cancel.textContent = "Cancel";
+		cancel.textContent = cancelLabel;
 
 		const confirm = document.createElement("button");
 		confirm.type = "button";
 		confirm.className = "btn-primary";
-		confirm.textContent = "Confirm write";
+		confirm.textContent = confirmLabel;
 
 		row.append(cancel, confirm);
 		pop.appendChild(row);
 
 		document.body.appendChild(pop);
-		// Position above the anchor, right-aligned. The commit bar sits at
-		// the bottom of the viewport so we float the popover upward.
 		const rect = anchor.getBoundingClientRect();
 		const w = pop.offsetWidth;
 		const h = pop.offsetHeight;
@@ -851,7 +863,9 @@ function confirmFlashPopover(anchor: HTMLElement): Promise<boolean> {
 			8,
 			Math.min(window.innerWidth - w - 8, rect.right - w),
 		);
-		const top = Math.max(8, rect.top - h - 8);
+		// Prefer to float above the anchor; flip below if there's no room.
+		let top = rect.top - h - 8;
+		if (top < 8) top = Math.min(window.innerHeight - h - 8, rect.bottom + 8);
 		pop.style.left = `${left}px`;
 		pop.style.top = `${top}px`;
 
@@ -879,8 +893,16 @@ function confirmFlashPopover(anchor: HTMLElement): Promise<boolean> {
 		confirm.addEventListener("click", () => finish(true));
 		document.addEventListener("mousedown", onOutside, true);
 		document.addEventListener("keydown", onKey, true);
-		// Focus the confirm button so keyboard users can Enter through.
 		setTimeout(() => confirm.focus(), 0);
+	});
+}
+
+// Thin wrapper that preserves the previous flash-write caller's API.
+function confirmFlashPopover(anchor: HTMLElement): Promise<boolean> {
+	return confirmPopover({
+		anchor,
+		message: "Write to device flash? This persists across power cycles.",
+		confirmLabel: "Confirm write",
 	});
 }
 
@@ -1442,6 +1464,7 @@ export async function connectToDevice(
 		saveSession({ lastDeviceKey: deviceKey(device) });
 
 		renderUI(getEqState());
+		refreshDeviceInfoUI();
 
 		if (cfg.supportsReadback) {
 			setupListener(device);
@@ -1459,12 +1482,21 @@ export async function connectToDevice(
 // Silent auto-reconnect. Uses `navigator.hid.getDevices()` which only
 // returns devices the user has already granted permission to, so no
 // chooser prompt is shown. Any failure mode (unsupported browser, no
-// matches, permission revoked, open() throws) is a silent no-op.
+// matches, permission revoked, open() throws) is a silent no-op EXCEPT
+// the "nothing to reconnect to" case which logs a one-line hint so the
+// user knows we tried and why nothing happened.
 export async function autoReconnectDevice() {
+	// Respect the user's preference — skip entirely if auto-reconnect is off.
+	if (!getSession().autoReconnect) return;
 	try {
 		if (typeof navigator === "undefined" || !navigator.hid) return;
 		const devices = await navigator.hid.getDevices();
-		if (!devices || devices.length === 0) return;
+		if (!devices || devices.length === 0) {
+			log(
+				"Auto-reconnect: no authorized device available. Click Connect.",
+			);
+			return;
+		}
 
 		const filters = allVendorFilters();
 		const vendorSet = new Set(
@@ -1472,7 +1504,12 @@ export async function autoReconnectDevice() {
 		);
 
 		const matches = devices.filter((d) => vendorSet.has(d.vendorId));
-		if (matches.length === 0) return;
+		if (matches.length === 0) {
+			log(
+				"Auto-reconnect: no authorized device available. Click Connect.",
+			);
+			return;
+		}
 
 		let picked: HIDDevice;
 		if (matches.length === 1) {
@@ -1486,6 +1523,10 @@ export async function autoReconnectDevice() {
 		await connectToDevice(picked, { silent: true });
 		if (getDevice() === picked) {
 			log(`Auto-reconnected to ${picked.productName ?? "device"}.`);
+		} else {
+			log(
+				"Auto-reconnect: no authorized device available. Click Connect.",
+			);
 		}
 	} catch {
 		// Silent: permission may have been revoked, or the browser doesn't
@@ -1819,6 +1860,12 @@ async function shareCurrentEqLink() {
 
 // Sidebar "Disable EQ" button. Mirrors the bottom `#eqEnabledSwitch`
 // checkbox so the two surfaces stay in sync.
+//
+// JDS pivot 2026-04-17: toggling now actually bypasses the EQ stack:
+//  - dsp.ts `writeBand` writes gain=0 for every band when bypassed.
+//  - peq.ts renders the curve in muted color + 0 dB reference line.
+//  - When a device is connected, we auto-sync so the new bypass state
+//    reaches the hardware immediately (no extra Sync click needed).
 function wireEqDisable() {
 	const btn = document.getElementById("btnDisableEq") as HTMLButtonElement | null;
 	const sw = document.getElementById("eqEnabledSwitch") as HTMLInputElement | null;
@@ -1827,36 +1874,181 @@ function wireEqDisable() {
 		if (sw && sw.checked !== on) sw.checked = on;
 		if (btn) btn.textContent = on ? "Disable EQ" : "Enable EQ";
 	};
-	btn?.addEventListener("click", () => {
-		// TODO(eq-bypass): actually bypass the EQ stack when peq.ts /
-		// dsp.ts grow consumers for ddpec:eq-toggled. For now flip state +
-		// visual + event.
-		setEqEnabled(!isEqEnabled());
-		saveSession({ eqEnabled: isEqEnabled() });
+	const apply = async () => {
+		const on = isEqEnabled();
+		saveSession({ eqEnabled: on });
 		paint();
-		console.log(`ddpec:eq-toggled enabled=${isEqEnabled()}`);
+		renderUI(getEqState()); // repaint canvas with muted / live colors
+		toast(on ? "EQ enabled" : "EQ bypassed");
+		// Auto-flush to device so the new bypass state takes effect.
+		if (getDevice()) {
+			try {
+				await syncToDevice();
+				markSynced(getActiveSlot());
+			} catch (err) {
+				log(`Auto-sync after EQ toggle failed: ${(err as Error).message}`);
+			}
+		}
+	};
+	btn?.addEventListener("click", () => {
+		setEqEnabled(!isEqEnabled());
+		void apply();
 	});
 	sw?.addEventListener("change", () => {
 		setEqEnabled(!!sw.checked);
-		saveSession({ eqEnabled: isEqEnabled() });
-		paint();
-		console.log(`ddpec:eq-toggled enabled=${isEqEnabled()}`);
+		void apply();
 	});
 	paint();
 }
 
-// Bottom panel tabs — Tabular EQ / Preamp Gain. There is no existing
-// separate preamp panel in the DOM, so this is a placeholder until
-// someone builds one.
+// Bottom panel tabs — Tabular EQ / Preamp Gain. Preamp pane is built on
+// first activation and injected next to the tabular editor; switching
+// tabs toggles visibility without rebuilding.
 function wireBottomPanelTabs() {
 	const tab1 = document.getElementById("tabTabular");
 	const tab2 = document.getElementById("tabPreamp");
 	if (!tab1 || !tab2) return;
+
+	let preampPane: HTMLElement | null = null;
+	let preampValueInput: HTMLInputElement | null = null;
+	let preampSlider: HTMLInputElement | null = null;
+	let preampPeakHint: HTMLElement | null = null;
+
+	const getTabularParts = () => {
+		const container = document.getElementById("eqContainer");
+		return {
+			bandEditor: container?.querySelector<HTMLElement>("#bandEditor") ?? null,
+			bandEditorHeader:
+				container?.querySelector<HTMLElement>("#bandEditorHeader") ?? null,
+			root: container?.querySelector<HTMLElement>("#peq-root") ?? null,
+		};
+	};
+
+	const recomputePeakHint = () => {
+		if (!preampPeakHint) return;
+		const bands = getEqState();
+		let peak = 0;
+		for (const b of bands) {
+			if (!b.enabled) continue;
+			if (b.gain > peak) peak = b.gain;
+		}
+		preampPeakHint.textContent = `Negative preamp headroom prevents digital clipping when boosting bands. Current peak boost: +${peak.toFixed(1)} dB.`;
+	};
+
+	const buildPreampPane = (): HTMLElement => {
+		const pane = document.createElement("div");
+		pane.id = "preampPane";
+		pane.className = "preamp-pane";
+
+		const label = document.createElement("div");
+		label.className = "label";
+		label.textContent = "Pre-amp Gain";
+		pane.appendChild(label);
+
+		const value = document.createElement("input");
+		value.type = "number";
+		value.min = "-20";
+		value.max = "10";
+		value.step = "0.1";
+		value.value = String(getGlobalGainState());
+		value.className = "value-input";
+		pane.appendChild(value);
+		preampValueInput = value;
+
+		const slider = document.createElement("input");
+		slider.type = "range";
+		slider.min = "-20";
+		slider.max = "10";
+		slider.step = "0.1";
+		slider.value = String(getGlobalGainState());
+		slider.className = "wide-slider";
+		pane.appendChild(slider);
+		preampSlider = slider;
+
+		const autoBtn = document.createElement("button");
+		autoBtn.type = "button";
+		autoBtn.className = "btn-outline";
+		autoBtn.textContent = "Auto (prevent clipping)";
+		pane.appendChild(autoBtn);
+
+		const hint = document.createElement("div");
+		hint.className = "hint";
+		pane.appendChild(hint);
+		preampPeakHint = hint;
+		recomputePeakHint();
+
+		const push = (v: number) => {
+			const clamped = Math.max(-20, Math.min(10, v));
+			setGlobalGain(clamped);
+			if (preampValueInput) preampValueInput.value = String(clamped);
+			if (preampSlider) preampSlider.value = String(clamped);
+			recomputePeakHint();
+			const cfg = getActiveConfig();
+			if (cfg) persistProfile(cfg.key);
+		};
+		value.addEventListener("input", () => {
+			const v = Number(value.value);
+			if (Number.isFinite(v)) push(v);
+		});
+		slider.addEventListener("input", () => {
+			const v = Number(slider.value);
+			if (Number.isFinite(v)) push(v);
+		});
+		autoBtn.addEventListener("click", () => {
+			const bands = getEqState();
+			let peak = 0;
+			for (const b of bands) {
+				if (!b.enabled) continue;
+				if (b.gain > peak) peak = b.gain;
+			}
+			snapshot();
+			push(-Math.max(0, peak));
+			updateHistoryButtons();
+			toast(`Auto preamp set to ${(-Math.max(0, peak)).toFixed(1)} dB`);
+		});
+
+		return pane;
+	};
+
+	const syncPreampFromState = () => {
+		const gain = getGlobalGainState();
+		if (preampValueInput && document.activeElement !== preampValueInput)
+			preampValueInput.value = String(gain);
+		if (preampSlider && document.activeElement !== preampSlider)
+			preampSlider.value = String(gain);
+		recomputePeakHint();
+	};
+
+	const showTabular = () => {
+		const parts = getTabularParts();
+		if (parts.bandEditor) parts.bandEditor.style.display = "";
+		if (parts.bandEditorHeader) parts.bandEditorHeader.style.display = "";
+		if (preampPane) preampPane.style.display = "none";
+	};
+	const showPreamp = () => {
+		const parts = getTabularParts();
+		if (parts.bandEditor) parts.bandEditor.style.display = "none";
+		if (parts.bandEditorHeader) parts.bandEditorHeader.style.display = "none";
+		if (!preampPane) {
+			preampPane = buildPreampPane();
+			// Insert inside #peq-root after the canvas's parent so it shares
+			// the same flex column as the tabular editor.
+			const root = parts.root;
+			if (root) root.appendChild(preampPane);
+			else document.body.appendChild(preampPane);
+		} else {
+			syncPreampFromState();
+		}
+		preampPane.style.display = "flex";
+	};
+
 	const paint = (which: "tabular" | "preamp") => {
 		tab1.classList.toggle("active", which === "tabular");
 		tab2.classList.toggle("active", which === "preamp");
 		tab1.setAttribute("aria-selected", String(which === "tabular"));
 		tab2.setAttribute("aria-selected", String(which === "preamp"));
+		if (which === "tabular") showTabular();
+		else showPreamp();
 	};
 	tab1.addEventListener("click", () => {
 		paint("tabular");
@@ -1865,8 +2057,30 @@ function wireBottomPanelTabs() {
 	tab2.addEventListener("click", () => {
 		paint("preamp");
 		saveSession({ bottomPanelTab: "preamp" });
-		// TODO(preamp-panel): render a dedicated preamp-gain editor.
-		console.log("TODO: preamp panel");
+	});
+
+	// Keep the preamp pane's widgets in sync when the global gain moves
+	// from elsewhere (top-bar slider, preset apply, history undo, etc.).
+	document.addEventListener("ddpec:dirty-change", syncPreampFromState);
+}
+
+// Log console "Clear" button — empties #logConsole and #logTrayLatest so
+// a power user can reset noisy output without reloading.
+function wireLogClear() {
+	const btn = document.getElementById("btnLogClear") as HTMLButtonElement | null;
+	if (!btn) return;
+	btn.addEventListener("click", (e) => {
+		e.stopPropagation();
+		const c = document.getElementById("logConsole");
+		if (c) {
+			// Remove every child except the Clear button itself.
+			for (const child of Array.from(c.childNodes)) {
+				if (child instanceof HTMLElement && child.id === "btnLogClear") continue;
+				child.remove();
+			}
+		}
+		const latest = document.getElementById("logTrayLatest");
+		if (latest) latest.textContent = "";
 	});
 }
 
@@ -1901,9 +2115,9 @@ function wireLogTray() {
 	paint();
 }
 
-// Top nav tabs — DSP / Device Settings. Device Settings is a stub pane;
-// create it on first activation. Dual-wire both the contract IDs and the
-// current index.html IDs so this works during the HTML agent's rollout.
+// Top nav tabs — DSP / Device Settings. The Device Settings pane is a
+// real static <section id="deviceSettingsPane"> in index.html; this
+// function wires its radio buttons, toggles, and action buttons.
 function wireNavTabs() {
 	const dspBtn =
 		(document.getElementById("navTabDsp") as HTMLElement | null) ??
@@ -1913,7 +2127,10 @@ function wireNavTabs() {
 		document.getElementById("tabDevice");
 	if (!dspBtn || !devBtn) return;
 	const mainEl = document.querySelector("main") as HTMLElement | null;
-	let devicePane: HTMLElement | null = null;
+	const commitBar = document.getElementById("commitBar");
+	const devicePane = document.getElementById("deviceSettingsPane");
+
+	let deviceWired = false;
 
 	const showDsp = () => {
 		dspBtn.classList.add("active");
@@ -1921,33 +2138,30 @@ function wireNavTabs() {
 		dspBtn.setAttribute("aria-selected", "true");
 		devBtn.setAttribute("aria-selected", "false");
 		if (mainEl) mainEl.style.display = "";
-		if (devicePane) devicePane.style.display = "none";
+		if (commitBar) commitBar.classList.toggle("hidden", !hasAnyDirty());
+		if (devicePane) {
+			devicePane.classList.add("hidden");
+			devicePane.classList.remove("flex");
+		}
 	};
 	const showDevice = () => {
 		devBtn.classList.add("active");
 		dspBtn.classList.remove("active");
 		devBtn.setAttribute("aria-selected", "true");
 		dspBtn.setAttribute("aria-selected", "false");
-		if (!devicePane) {
-			devicePane = document.createElement("div");
-			devicePane.id = "deviceSettingsPane";
-			devicePane.textContent =
-				"Device Settings coming soon — theme toggle, firmware version, factory reset";
-			devicePane.style.flex = "1";
-			devicePane.style.display = "flex";
-			devicePane.style.alignItems = "center";
-			devicePane.style.justifyContent = "center";
-			devicePane.style.color = "var(--color-text-3)";
-			devicePane.style.fontSize = "12px";
-			// Insert right after <main> so layout is sane in both states.
-			if (mainEl?.parentNode) {
-				mainEl.parentNode.insertBefore(devicePane, mainEl.nextSibling);
-			} else {
-				document.body.appendChild(devicePane);
-			}
-		}
 		if (mainEl) mainEl.style.display = "none";
-		devicePane.style.display = "flex";
+		// Hide commit bar under Device Settings — it only applies to DSP.
+		if (commitBar) commitBar.classList.add("hidden");
+		if (devicePane) {
+			devicePane.classList.remove("hidden");
+			devicePane.classList.add("flex");
+			if (!deviceWired) {
+				wireDeviceSettingsPane();
+				deviceWired = true;
+			}
+			refreshDeviceInfoUI();
+			refreshThemeRadios();
+		}
 	};
 	dspBtn.addEventListener("click", () => {
 		showDsp();
@@ -1957,18 +2171,120 @@ function wireNavTabs() {
 		showDevice();
 		saveSession({ navTab: "device" });
 	});
+
+	// Keep the device-info block live while the pane is visible (connect /
+	// disconnect happens from the top bar).
+	document.addEventListener("ddpec:theme-change", refreshThemeRadios);
+}
+
+// Paint the theme radio buttons to reflect the current preference.
+function refreshThemeRadios() {
+	const pref = getThemePreference();
+	for (const el of document.querySelectorAll<HTMLInputElement>(
+		'input[name="themePref"]',
+	)) {
+		el.checked = el.value === pref;
+	}
+}
+
+// Paint the device info rows (or empty-state) based on current connection.
+function refreshDeviceInfoUI() {
+	const empty = document.getElementById("deviceInfoEmpty");
+	const rows = document.getElementById("deviceInfoRows");
+	const name = document.getElementById("deviceInfoName");
+	const ids = document.getElementById("deviceInfoIds");
+	const device = getDevice();
+	if (!empty || !rows) return;
+	if (device) {
+		empty.classList.add("hidden");
+		rows.classList.remove("hidden");
+		rows.classList.add("flex");
+		if (name) name.textContent = device.productName ?? "(unnamed device)";
+		if (ids) {
+			const vid = device.vendorId?.toString(16).toUpperCase().padStart(4, "0");
+			const pid = device.productId?.toString(16).toUpperCase().padStart(4, "0");
+			ids.textContent = `0x${vid} / 0x${pid}`;
+		}
+		// #fwVersion is filled in by dsp.ts inputreport handler when readback
+		// lands; nothing to do here.
+	} else {
+		empty.classList.remove("hidden");
+		rows.classList.add("hidden");
+		rows.classList.remove("flex");
+	}
+}
+
+// Wire the static device-settings pane's interactive widgets. Idempotent —
+// called once on first show, because child elements are real HTML not
+// re-rendered.
+function wireDeviceSettingsPane() {
+	// Theme radio buttons.
+	for (const el of document.querySelectorAll<HTMLInputElement>(
+		'input[name="themePref"]',
+	)) {
+		el.addEventListener("change", () => {
+			if (!el.checked) return;
+			const v = el.value as ThemePreference;
+			setTheme(v);
+		});
+	}
+
+	// Auto-reconnect switch.
+	const autoSw = document.getElementById(
+		"autoReconnectSwitch",
+	) as HTMLInputElement | null;
+	if (autoSw) {
+		autoSw.checked = getSession().autoReconnect;
+		autoSw.addEventListener("change", () => {
+			saveSession({ autoReconnect: autoSw.checked });
+			toast(
+				autoSw.checked
+					? "Auto-reconnect enabled"
+					: "Auto-reconnect disabled",
+			);
+		});
+	}
+
+	// Manual disconnect.
+	document
+		.getElementById("btnManualDisconnect")
+		?.addEventListener("click", () => toggleConnection());
+
+	// Test signals launcher.
+	document
+		.getElementById("btnOpenSignals")
+		?.addEventListener("click", () => openSignalGenerator());
+
+	// Factory reset — anchored confirm popover.
+	const resetBtn = document.getElementById(
+		"btnFactoryReset",
+	) as HTMLElement | null;
+	resetBtn?.addEventListener("click", async () => {
+		const ok = await confirmPopover({
+			anchor: resetBtn,
+			message:
+				"Reset slot A, slot B, and pre-amp to defaults? This cannot be undone.",
+			confirmLabel: "Reset all",
+		});
+		if (!ok) return;
+		await resetToDefaults();
+	});
 }
 
 // Commit bar — hide when clean, show when any slot is dirty; mirror the
 // "Preset changed" chip in the preset action bar. Subscribes to the
 // dirty-change event broadcast by state.ts so we don't poll.
+//
+// JDS pivot 2026-04-17: stays hidden entirely while the Device Settings
+// tab is active — commit actions belong to DSP view only.
 function wireCommitBar() {
 	const bar = document.getElementById("commitBar");
 	const pendingChip = document.getElementById("pendingChangesChip");
 	const changedChip = document.getElementById("presetChangedChip");
 	const apply = () => {
 		const dirty = hasAnyDirty();
-		if (bar) bar.classList.toggle("hidden", !dirty);
+		const onDeviceTab = getSession().navTab === "device";
+		if (bar) bar.classList.toggle("hidden", !dirty || onDeviceTab);
 		if (pendingChip) {
 			if (dirty) pendingChip.removeAttribute("hidden");
 			else pendingChip.setAttribute("hidden", "");

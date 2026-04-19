@@ -98,8 +98,11 @@ document
 	?.addEventListener("click", () => exportProfile());
 
 const btnImport = document.getElementById("btnImport");
+const btnImportJson = document.getElementById("btnImportJson");
 const fileInput = document.getElementById("fileInput") as HTMLInputElement | null;
 btnImport?.addEventListener("click", () => fileInput?.click());
+// JDS pivot 2026-04-17: visible entry point in the preset sidebar.
+btnImportJson?.addEventListener("click", () => fileInput?.click());
 fileInput?.addEventListener("change", (e) => importProfile(e));
 
 /**

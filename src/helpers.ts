@@ -64,12 +64,26 @@ export function enableControls(enabled: boolean) {
  * Log message to the app console. Also updates the collapsed log-tray's
  * "latest" preview so single-line feedback is visible without expanding.
  *
+ * JDS pivot 2026-04-17: cap at most recent 500 lines so long sessions don't
+ * grow #logConsole unbounded. Drops oldest line(s) once past the cap.
+ *
  * @param msg
  */
+const LOG_LINE_CAP = 500;
 export function log(msg: string) {
 	const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
 	if (c) {
-		c.innerHTML += `<div>${line}</div>`;
+		const div = document.createElement("div");
+		div.textContent = line;
+		c.appendChild(div);
+		// Cap: drop oldest children until under cap. Skip non-element nodes
+		// (e.g. initial text content "Ready to connect...") by counting
+		// childElementCount and removing firstElementChild.
+		while (c.childElementCount > LOG_LINE_CAP) {
+			const first = c.firstElementChild;
+			if (!first) break;
+			first.remove();
+		}
 		c.scrollTop = c.scrollHeight;
 	}
 	// Mirror to the tray. Resolve lazily in case it was not present at

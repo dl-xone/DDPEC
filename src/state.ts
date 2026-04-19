@@ -99,20 +99,32 @@ export function getGlobalGainState(): number {
 	return state.slots[state.activeSlot].gain;
 }
 
-export function setGlobalGainState(gain: number) {
+// JDS pivot 2026-04-17: optional `silent` opts skip the dirty flip +
+// broadcast. Device readback paths (dsp.ts inputreport handler) pass
+// `{ silent: true }` so reading state from hardware on connect doesn't
+// pop the commit bar. User-initiated edits stay noisy.
+export interface SilentOpts {
+	silent?: boolean;
+}
+
+export function setGlobalGainState(gain: number, opts?: SilentOpts) {
 	state.slots[state.activeSlot].gain = gain;
-	dirty[state.activeSlot] = true;
-	broadcastDirty();
+	if (!opts?.silent) {
+		dirty[state.activeSlot] = true;
+		broadcastDirty();
+	}
 }
 
 export function getEqState(): EQ {
 	return state.slots[state.activeSlot].eq;
 }
 
-export function setEqState(eq: EQ) {
+export function setEqState(eq: EQ, opts?: SilentOpts) {
 	state.slots[state.activeSlot].eq = eq;
-	dirty[state.activeSlot] = true;
-	broadcastDirty();
+	if (!opts?.silent) {
+		dirty[state.activeSlot] = true;
+		broadcastDirty();
+	}
 }
 
 // Mutate a single band field in place. Existing call sites depend on
