@@ -98,7 +98,6 @@ import {
 	setEqEnabled,
 	setEqState,
 	setGlobalGainState,
-	setOutputMode,
 	type SlotName,
 	swapSlots,
 } from "./state.ts";
@@ -170,6 +169,11 @@ export function initState() {
 		.getElementById("btnTarget")
 		?.addEventListener("click", () => openTargetLoader());
 
+	// FR overlay picker.
+	document
+		.getElementById("btnMeasurement")
+		?.addEventListener("click", () => openMeasurementLoader());
+
 	// Preset sidebar toggle — visible only on narrow viewports.
 	document
 		.getElementById("btnTogglePresets")
@@ -208,7 +212,6 @@ export function initState() {
 	// contract can roll out piecewise with the index.html agent.
 	wirePresetActionBar();
 	wireHistoryButtons();
-	wireModeControl();
 	wireEqDisable();
 	wireBottomPanelTabs();
 	wireLogTray();
@@ -1499,20 +1502,6 @@ export async function autoReconnectDevice() {
 export function initSession() {
 	const s = getSession();
 
-	// Restore output mode through the state setter so the event fires.
-	if (s.outputMode !== "headphone") {
-		setOutputMode(s.outputMode);
-	}
-	// Apply visual state for the mode buttons.
-	const hp = document.getElementById("modeHeadphone");
-	const rca = document.getElementById("modeRca");
-	if (hp && rca) {
-		hp.classList.toggle("active", s.outputMode === "headphone");
-		rca.classList.toggle("active", s.outputMode === "rca");
-		hp.setAttribute("aria-selected", String(s.outputMode === "headphone"));
-		rca.setAttribute("aria-selected", String(s.outputMode === "rca"));
-	}
-
 	// Restore EQ enabled flag.
 	setEqEnabled(s.eqEnabled);
 	const eqBtn = document.getElementById("btnDisableEq");
@@ -1826,28 +1815,6 @@ async function shareCurrentEqLink() {
 		log(`Share link failed: ${(err as Error).message}`);
 		toast("Could not copy share link");
 	}
-}
-
-// Sidebar "Mode" segmented control. There's no concrete device-level mode
-// switching today — we emit an event so future consumers can hook in, and
-// toggle the visual state.
-function wireModeControl() {
-	const hp = document.getElementById("modeHeadphone");
-	const rca = document.getElementById("modeRca");
-	if (!hp || !rca) return;
-	const set = (mode: "headphone" | "rca") => {
-		hp.classList.toggle("active", mode === "headphone");
-		rca.classList.toggle("active", mode === "rca");
-		hp.setAttribute("aria-selected", String(mode === "headphone"));
-		rca.setAttribute("aria-selected", String(mode === "rca"));
-		// TODO(device-mode): hook into deviceConfig when per-device mode
-		// switching lands. For now this is UI-only + a broadcast event.
-		setOutputMode(mode);
-		saveSession({ outputMode: mode });
-		console.log(`ddpec:mode-changed ${mode}`);
-	};
-	hp.addEventListener("click", () => set("headphone"));
-	rca.addEventListener("click", () => set("rca"));
 }
 
 // Sidebar "Disable EQ" button. Mirrors the bottom `#eqEnabledSwitch`

@@ -8,11 +8,9 @@
 export type NavTab = "dsp" | "device";
 export type BottomPanelTab = "tabular" | "preamp";
 export type SlotName = "A" | "B";
-export type OutputMode = "headphone" | "rca";
 
 export interface SessionState {
 	activeSlot: SlotName;
-	outputMode: OutputMode;
 	eqEnabled: boolean;
 	navTab: NavTab;
 	bottomPanelTab: BottomPanelTab;
@@ -29,7 +27,6 @@ const DEBOUNCE_MS = 200;
 
 const DEFAULTS: SessionState = {
 	activeSlot: "A",
-	outputMode: "headphone",
 	eqEnabled: true,
 	navTab: "dsp",
 	bottomPanelTab: "tabular",
@@ -51,8 +48,6 @@ function sanitize(raw: unknown): Partial<SessionState> {
 	const o = raw as Record<string, unknown>;
 	const out: Partial<SessionState> = {};
 	if (o.activeSlot === "A" || o.activeSlot === "B") out.activeSlot = o.activeSlot;
-	if (o.outputMode === "headphone" || o.outputMode === "rca")
-		out.outputMode = o.outputMode;
 	if (typeof o.eqEnabled === "boolean") out.eqEnabled = o.eqEnabled;
 	if (o.navTab === "dsp" || o.navTab === "device") out.navTab = o.navTab;
 	if (o.bottomPanelTab === "tabular" || o.bottomPanelTab === "preamp")

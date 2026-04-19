@@ -71,23 +71,6 @@ export function setEqEnabled(on: boolean) {
 	}
 }
 
-// JDS pivot: output-mode (headphone vs rca). Some configs may not support
-// distinct modes — callers can subscribe to `ddpec:mode-changed` and ignore.
-export type OutputMode = "headphone" | "rca";
-let outputMode: OutputMode = "headphone";
-export function getOutputMode(): OutputMode {
-	return outputMode;
-}
-export function setOutputMode(mode: OutputMode) {
-	if (outputMode === mode) return;
-	outputMode = mode;
-	if (typeof document !== "undefined") {
-		document.dispatchEvent(
-			new CustomEvent("ddpec:mode-changed", { detail: { mode } }),
-		);
-	}
-}
-
 export function getDevice() {
 	return state.device;
 }

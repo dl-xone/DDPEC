@@ -57,7 +57,6 @@ describe("session", () => {
 	it("getSession returns defaults when nothing persisted", () => {
 		const s = getSession();
 		expect(s.activeSlot).toBe("A");
-		expect(s.outputMode).toBe("headphone");
 		expect(s.eqEnabled).toBe(true);
 		expect(s.navTab).toBe("dsp");
 		expect(s.bottomPanelTab).toBe("tabular");
@@ -122,11 +121,11 @@ describe("session", () => {
 	it("getSession picks up previously persisted values on cold start", () => {
 		store.set(
 			"ddpec.session",
-			JSON.stringify({ activeSlot: "B", outputMode: "rca" }),
+			JSON.stringify({ activeSlot: "B", navTab: "device" }),
 		);
 		resetSessionForTest();
 		const s = getSession();
 		expect(s.activeSlot).toBe("B");
-		expect(s.outputMode).toBe("rca");
+		expect(s.navTab).toBe("device");
 	});
 });
