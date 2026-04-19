@@ -18,6 +18,9 @@ export interface Preset {
 	bands: PresetBand[];
 	// Optional preamp gain hint, applied to the global gain control.
 	preamp?: number;
+	// True for presets stored in the user-presets layer. Built-ins omit
+	// this (or set false). Used by the UI to gate Update / Delete actions.
+	isUser?: boolean;
 }
 
 export const PRESETS: Preset[] = [
@@ -84,6 +87,168 @@ export const PRESETS: Preset[] = [
 		preamp: 0,
 	},
 ];
+
+// ----- User preset layer --------------------------------------------
+//
+// Built-ins live in `PRESETS`. Anything the user names and saves lives in
+// localStorage under `ddpec.user-presets` and is concatenated into the
+// sidebar list at render time. IDs are prefixed `user:` so they never
+// collide with built-in string ids.
+
+const USER_PRESETS_KEY = "ddpec.user-presets";
+const USER_ID_PREFIX = "user:";
+
+function hasStorage(): boolean {
+	return typeof localStorage !== "undefined";
+}
+
+function validateUserPreset(raw: unknown): Preset | null {
+	if (!raw || typeof raw !== "object") return null;
+	const o = raw as Record<string, unknown>;
+	if (typeof o.id !== "string" || !o.id.startsWith(USER_ID_PREFIX)) return null;
+	if (typeof o.name !== "string" || o.name.length === 0) return null;
+	if (!Array.isArray(o.bands)) return null;
+	const bands: PresetBand[] = [];
+	for (const b of o.bands) {
+		if (!b || typeof b !== "object") return null;
+		const bb = b as Record<string, unknown>;
+		if (
+			typeof bb.freq !== "number" ||
+			typeof bb.gain !== "number" ||
+			typeof bb.q !== "number" ||
+			(bb.type !== "PK" && bb.type !== "LSQ" && bb.type !== "HSQ")
+		) {
+			return null;
+		}
+		bands.push({
+			freq: bb.freq,
+			gain: bb.gain,
+			q: bb.q,
+			type: bb.type as BandType,
+		});
+	}
+	const out: Preset = {
+		id: o.id,
+		name: o.name,
+		description: typeof o.description === "string" ? o.description : "",
+		bands,
+		isUser: true,
+	};
+	if (typeof o.preamp === "number") out.preamp = o.preamp;
+	return out;
+}
+
+export function loadUserPresets(): Preset[] {
+	if (!hasStorage()) return [];
+	try {
+		const raw = localStorage.getItem(USER_PRESETS_KEY);
+		if (!raw) return [];
+		const parsed = JSON.parse(raw);
+		if (!Array.isArray(parsed)) return [];
+		const out: Preset[] = [];
+		for (const p of parsed) {
+			const v = validateUserPreset(p);
+			if (v) out.push(v);
+		}
+		return out;
+	} catch {
+		return [];
+	}
+}
+
+export function saveUserPresets(list: Preset[]) {
+	if (!hasStorage()) return;
+	try {
+		localStorage.setItem(USER_PRESETS_KEY, JSON.stringify(list));
+	} catch {
+		// storage full / disabled — drop silently
+	}
+}
+
+// Stable-ish id. crypto.randomUUID() isn't always available in older
+// runtimes; timestamp + random suffix is good enough for a local list.
+function mintUserId(): string {
+	const rand = Math.random().toString(36).slice(2, 8);
+	return `${USER_ID_PREFIX}${Date.now().toString(36)}-${rand}`;
+}
+
+export function addUserPreset(
+	input: Omit<Preset, "id" | "isUser"> & { id?: string },
+): Preset {
+	const list = loadUserPresets();
+	const preset: Preset = {
+		id: input.id ?? mintUserId(),
+		name: input.name,
+		description: input.description,
+		bands: input.bands,
+		preamp: input.preamp,
+		isUser: true,
+	};
+	list.push(preset);
+	saveUserPresets(list);
+	return preset;
+}
+
+export function updateUserPreset(
+	id: string,
+	patch: Partial<Omit<Preset, "id" | "isUser">>,
+): Preset | null {
+	if (!id.startsWith(USER_ID_PREFIX)) return null;
+	const list = loadUserPresets();
+	const idx = list.findIndex((p) => p.id === id);
+	if (idx < 0) return null;
+	list[idx] = { ...list[idx], ...patch, id, isUser: true };
+	saveUserPresets(list);
+	return list[idx];
+}
+
+export function deleteUserPreset(id: string): boolean {
+	if (!id.startsWith(USER_ID_PREFIX)) return false;
+	const list = loadUserPresets();
+	const next = list.filter((p) => p.id !== id);
+	if (next.length === list.length) return false;
+	saveUserPresets(next);
+	return true;
+}
+
+export function isUserPresetId(id: string): boolean {
+	return id.startsWith(USER_ID_PREFIX);
+}
+
+/**
+ * Combined built-ins + user presets, in display order (built-ins first).
+ * Resolves every call so sidebar re-renders pick up fresh additions.
+ */
+export function getAllPresets(): Preset[] {
+	return [...PRESETS, ...loadUserPresets()];
+}
+
+/**
+ * Convert live EQ state into the sparse preset-bands shape used by the
+ * save layer. Trailing flat bands are dropped so a preset saved from an
+ * 8-band device can be applied to a 10-band device without spilling
+ * zero-gain filters into the extra slots.
+ */
+export function eqToPresetBands(
+	eq: { freq: number; gain: number; q: number; type: string; enabled: boolean }[],
+): PresetBand[] {
+	const bands: PresetBand[] = [];
+	for (const b of eq) {
+		bands.push({
+			freq: b.freq,
+			gain: b.gain,
+			q: b.q,
+			type: (b.type === "LSQ" || b.type === "HSQ" ? b.type : "PK") as BandType,
+		});
+	}
+	// Trim trailing flat bands so saved presets stay compact.
+	while (bands.length > 0) {
+		const last = bands[bands.length - 1];
+		if (last.gain === 0) bands.pop();
+		else break;
+	}
+	return bands;
+}
 
 // Apply a preset to a fresh EQ of `maxFilters` bands. Preset bands occupy
 // the leading slots; trailing slots stay flat at their default freq so

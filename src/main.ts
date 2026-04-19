@@ -2,6 +2,7 @@ import "./style.css";
 import {
 	handleFlashClick,
 	handleSyncClick,
+	initSession,
 	initState,
 	onSlotChange,
 	openKeyboardHelp,
@@ -28,6 +29,9 @@ export type EQ = Band[];
 // persisted / system preference; state + canvas come second.
 initTheme();
 initState();
+// Session restore must run after initState() so the wiring it patches
+// (mode buttons, tabs, log tray) already exists in the DOM.
+initSession();
 
 /**
  * Helper: dynamically import a named export from fn.ts and call it.

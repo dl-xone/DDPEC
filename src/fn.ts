@@ -42,7 +42,17 @@ import {
 	progressModal,
 	searchPickerModal,
 } from "./modal.ts";
-import { applyPreset, PRESETS } from "./presets.ts";
+import {
+	addUserPreset,
+	applyPreset,
+	deleteUserPreset,
+	eqToPresetBands,
+	getAllPresets,
+	isUserPresetId,
+	PRESETS,
+	updateUserPreset,
+} from "./presets.ts";
+import { getSession, saveSession } from "./session.ts";
 import {
 	getPlayingType,
 	playPinkNoise,
@@ -557,18 +567,32 @@ export function renderPresetSidebar(filter = "") {
 	if (!list) return;
 	list.replaceChildren();
 	const q = filter.trim().toLowerCase();
+	const selectedId = getSession().selectedPresetId;
+	const allPresets = getAllPresets();
 	let shown = 0;
-	for (const preset of PRESETS) {
+	let sawFirstUser = false;
+	for (const preset of allPresets) {
 		if (q && !`${preset.name} ${preset.description}`.toLowerCase().includes(q))
 			continue;
+		// Divider before the first user preset in the list (if any shown).
+		if (preset.isUser && !sawFirstUser) {
+			sawFirstUser = true;
+			const divider = document.createElement("div");
+			divider.className =
+				"text-[10px] uppercase tracking-wider text-text-3 px-2 pt-2 pb-1";
+			divider.textContent = "My presets";
+			list.appendChild(divider);
+		}
 		const row = document.createElement("button");
 		row.type = "button";
 		row.className = "preset-row text-left";
+		if (preset.id === selectedId) row.classList.add("active");
+		row.dataset.presetId = preset.id;
 		const col = document.createElement("div");
 		col.className = "flex flex-col";
 		const name = document.createElement("div");
 		name.className = "text-sm font-semibold";
-		name.textContent = preset.name;
+		name.textContent = preset.isUser ? `★ ${preset.name}` : preset.name;
 		const desc = document.createElement("div");
 		desc.className = "text-[11px] text-text-3 mt-0.5";
 		desc.textContent = preset.description;
@@ -611,7 +635,7 @@ async function applyPresetFromSidebar(id: string) {
 	const cfg = getActiveConfig();
 	const maxFilters = cfg?.maxFilters ?? DEFAULT_FREQS.length;
 	const defaultFreqs = cfg?.defaultFreqs ?? DEFAULT_FREQS;
-	const preset = PRESETS.find((p) => p.id === id);
+	const preset = getAllPresets().find((p) => p.id === id);
 	if (!preset) return;
 	if (isDirty(getActiveSlot())) {
 		const ok = await confirmModal(
@@ -625,6 +649,11 @@ async function applyPresetFromSidebar(id: string) {
 	if (typeof preset.preamp === "number" && !cfg?.autoGlobalGain) {
 		setGlobalGain(preset.preamp);
 	}
+	saveSession({ selectedPresetId: preset.id });
+	renderPresetSidebar(
+		(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
+			"",
+	);
 	renderUI(getEqState());
 	updateHistoryButtons();
 	if (cfg) persistProfile(cfg.key);
@@ -655,6 +684,7 @@ export async function activateSlot(slot: SlotName) {
 	}
 	snapshot();
 	setActiveSlot(slot);
+	saveSession({ activeSlot: slot });
 	updateGlobalGainUI(getGlobalGainState());
 	renderUI(getEqState());
 	updateHistoryButtons();
@@ -1318,15 +1348,29 @@ export function openSignalGenerator() {
 	dialog.addEventListener("close", () => stopSignal());
 }
 
-export async function connectToDevice() {
-	try {
-		const devices = await navigator.hid.requestDevice({
-			filters: allVendorFilters(),
-		});
-		if (devices.length === 0) return;
+// Loose device fingerprint used for auto-reconnect disambiguation. No
+// serial number — we treat vendor+product+productName as sufficient.
+function deviceKey(device: HIDDevice): string {
+	const vid = device.vendorId ?? 0;
+	const pid = device.productId ?? 0;
+	const name = device.productName ?? "";
+	return `${vid.toString(16)}:${pid.toString(16)}:${name}`;
+}
 
-		const device = devices[0];
-		await device.open();
+export async function connectToDevice(
+	preselected?: HIDDevice,
+	opts: { silent?: boolean } = {},
+) {
+	try {
+		let device: HIDDevice | undefined = preselected;
+		if (!device) {
+			const devices = await navigator.hid.requestDevice({
+				filters: allVendorFilters(),
+			});
+			if (devices.length === 0) return;
+			device = devices[0];
+		}
+		if (!device.opened) await device.open();
 		setDevice(device);
 
 		const cfg = pickDeviceConfig(device);
@@ -1391,6 +1435,9 @@ export async function connectToDevice() {
 		// Re-lock preamp after enableControls if autoGlobalGain
 		if (cfg.autoGlobalGain && gainSlider) gainSlider.disabled = true;
 
+		// Remember this device for auto-reconnect on next boot.
+		saveSession({ lastDeviceKey: deviceKey(device) });
+
 		renderUI(getEqState());
 
 		if (cfg.supportsReadback) {
@@ -1402,8 +1449,126 @@ export async function connectToDevice() {
 			);
 		}
 	} catch (err) {
-		log(`Error: ${(err as Error).message}`);
+		if (!opts.silent) log(`Error: ${(err as Error).message}`);
 	}
+}
+
+// Silent auto-reconnect. Uses `navigator.hid.getDevices()` which only
+// returns devices the user has already granted permission to, so no
+// chooser prompt is shown. Any failure mode (unsupported browser, no
+// matches, permission revoked, open() throws) is a silent no-op.
+export async function autoReconnectDevice() {
+	try {
+		if (typeof navigator === "undefined" || !navigator.hid) return;
+		const devices = await navigator.hid.getDevices();
+		if (!devices || devices.length === 0) return;
+
+		const filters = allVendorFilters();
+		const vendorSet = new Set(
+			filters.map((f) => f.vendorId).filter((v): v is number => typeof v === "number"),
+		);
+
+		const matches = devices.filter((d) => vendorSet.has(d.vendorId));
+		if (matches.length === 0) return;
+
+		let picked: HIDDevice;
+		if (matches.length === 1) {
+			picked = matches[0];
+		} else {
+			const saved = getSession().lastDeviceKey;
+			picked =
+				(saved && matches.find((d) => deviceKey(d) === saved)) || matches[0];
+		}
+
+		await connectToDevice(picked, { silent: true });
+		if (getDevice() === picked) {
+			log(`Auto-reconnected to ${picked.productName ?? "device"}.`);
+		}
+	} catch {
+		// Silent: permission may have been revoked, or the browser doesn't
+		// support the API. Leaving the user disconnected is the safe default.
+	}
+}
+
+/**
+ * Restore UI chrome from the persisted session and kick off a silent
+ * auto-reconnect attempt. Must run AFTER initState() so DOM elements and
+ * wiring exist; uses the existing setters so state broadcasts fire and
+ * listeners paint consistently.
+ */
+export function initSession() {
+	const s = getSession();
+
+	// Restore output mode through the state setter so the event fires.
+	if (s.outputMode !== "headphone") {
+		setOutputMode(s.outputMode);
+	}
+	// Apply visual state for the mode buttons.
+	const hp = document.getElementById("modeHeadphone");
+	const rca = document.getElementById("modeRca");
+	if (hp && rca) {
+		hp.classList.toggle("active", s.outputMode === "headphone");
+		rca.classList.toggle("active", s.outputMode === "rca");
+		hp.setAttribute("aria-selected", String(s.outputMode === "headphone"));
+		rca.setAttribute("aria-selected", String(s.outputMode === "rca"));
+	}
+
+	// Restore EQ enabled flag.
+	setEqEnabled(s.eqEnabled);
+	const eqBtn = document.getElementById("btnDisableEq");
+	const eqSw = document.getElementById("eqEnabledSwitch") as HTMLInputElement | null;
+	if (eqSw) eqSw.checked = s.eqEnabled;
+	if (eqBtn) eqBtn.textContent = s.eqEnabled ? "Disable EQ" : "Enable EQ";
+
+	// Restore nav tab — simulate a click on the right tab so wireNavTabs'
+	// internal state (devicePane creation) stays the source of truth.
+	if (s.navTab === "device") {
+		const devBtn =
+			document.getElementById("navTabDevice") ??
+			document.getElementById("tabDevice");
+		(devBtn as HTMLElement | null)?.click();
+	}
+
+	// Restore bottom-panel tab the same way.
+	if (s.bottomPanelTab === "preamp") {
+		document.getElementById("tabPreamp")?.click();
+	}
+
+	// Restore log tray expanded state.
+	if (s.logTrayExpanded) {
+		const tray = document.getElementById("logTray");
+		if (tray && !tray.classList.contains("expanded")) {
+			tray.classList.add("expanded");
+			tray.setAttribute("aria-expanded", "true");
+			const caret = document.getElementById("logTrayCaret");
+			if (caret) caret.textContent = "▾";
+			document.getElementById("logConsole")?.classList.remove("hidden");
+		}
+	}
+
+	// Restore active slot. Only flip if it differs from the in-memory
+	// default so we don't log a spurious "Switched to slot A" on boot.
+	if (s.activeSlot === "B") {
+		setActiveSlot("B");
+		updateGlobalGainUI(getGlobalGainState());
+		renderUI(getEqState());
+		updateSlotUI();
+	}
+
+	// Restore selected preset highlight (but don't re-apply the preset —
+	// EQ state is restored separately via persistProfile).
+	if (s.selectedPresetId) {
+		const all = getAllPresets();
+		if (!all.some((p) => p.id === s.selectedPresetId)) {
+			// Saved preset was deleted or otherwise unavailable; clear silently.
+			saveSession({ selectedPresetId: null });
+		} else {
+			renderPresetSidebar();
+		}
+	}
+
+	// Kick off auto-reconnect — fire-and-forget; any failure is silent.
+	void autoReconnectDevice();
 }
 
 export async function resetToDefaults() {
@@ -1546,28 +1711,17 @@ function wireHistoryButtons() {
 	updateHistoryButtons();
 }
 
-// Preset action bar — Update / Save As New / Get link / Delete. presets.ts
-// doesn't yet have user-preset CRUD, so Update and Save As New are TODO
-// stubs with visible feedback. Export stays wired via main.ts — we don't
-// touch it.
+// Preset action bar — Update / Save As New / Get link / Delete. Now
+// backed by the user-preset layer in presets.ts; built-ins remain
+// read-only with a toast pointing the user at Save As New.
 function wirePresetActionBar() {
-	// TODO(presets-crud): wire once presets.ts exposes saveOverCurrent().
 	document
 		.getElementById("btnUpdatePreset")
-		?.addEventListener("click", () => {
-			console.log("TODO: wire Update Preset");
-			toast("Update Preset — not yet implemented");
-		});
+		?.addEventListener("click", () => handleUpdatePreset());
 
-	// TODO(presets-crud): wire once presets.ts exposes saveAsNew(name).
 	document
 		.getElementById("btnSaveAsNew")
-		?.addEventListener("click", () => {
-			const name = window.prompt("Name this preset:");
-			if (!name) return;
-			console.log("TODO: wire Save As New Preset:", name);
-			toast(`Save As New (“${name}”) — not yet implemented`);
-		});
+		?.addEventListener("click", () => handleSaveAsNew());
 
 	document
 		.getElementById("btnGetLink")
@@ -1575,18 +1729,81 @@ function wirePresetActionBar() {
 
 	document
 		.getElementById("btnPresetDelete")
-		?.addEventListener("click", () => {
-			console.log("TODO: wire Delete Preset");
-			toast("Delete Preset — not yet implemented");
-		});
+		?.addEventListener("click", () => handleDeletePreset());
 	// Dual-wire the current index.html ID (#btnDeletePreset) until the HTML
 	// agent lands the contract rename to #btnPresetDelete.
 	document
 		.getElementById("btnDeletePreset")
-		?.addEventListener("click", () => {
-			console.log("TODO: wire Delete Preset");
-			toast("Delete Preset — not yet implemented");
-		});
+		?.addEventListener("click", () => handleDeletePreset());
+}
+
+// Public so main.ts' dynamic-import fallback can locate them by name, and
+// so the static call from wirePresetActionBar resolves without a round trip.
+export function handleSaveAsNew() {
+	const name = window.prompt("Name this preset:");
+	if (!name) return;
+	const trimmed = name.trim();
+	if (!trimmed) return;
+	const preset = addUserPreset({
+		name: trimmed,
+		description: "Saved from current EQ",
+		bands: eqToPresetBands(getEqState()),
+		preamp: getGlobalGainState(),
+	});
+	saveSession({ selectedPresetId: preset.id });
+	renderPresetSidebar(
+		(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
+			"",
+	);
+	toast(`Preset saved: ${preset.name}`);
+	log(`Saved preset "${preset.name}".`);
+}
+
+export function handleUpdatePreset() {
+	const selectedId = getSession().selectedPresetId;
+	if (!selectedId || !isUserPresetId(selectedId)) {
+		toast("Cannot modify built-in preset — use Save As New");
+		return;
+	}
+	const updated = updateUserPreset(selectedId, {
+		bands: eqToPresetBands(getEqState()),
+		preamp: getGlobalGainState(),
+	});
+	if (!updated) {
+		toast("Preset not found");
+		return;
+	}
+	renderPresetSidebar(
+		(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
+			"",
+	);
+	toast(`Updated: ${updated.name}`);
+	log(`Updated preset "${updated.name}".`);
+}
+
+export function handleDeletePreset() {
+	const selectedId = getSession().selectedPresetId;
+	if (!selectedId || !isUserPresetId(selectedId)) {
+		toast("Only user presets can be deleted");
+		return;
+	}
+	const ok = deleteUserPreset(selectedId);
+	if (!ok) {
+		toast("Preset not found");
+		return;
+	}
+	saveSession({ selectedPresetId: null });
+	renderPresetSidebar(
+		(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
+			"",
+	);
+	toast("Preset deleted");
+	log("Deleted user preset.");
+}
+
+// Re-export so main.ts' `callFnHandler(handleGetLink, ...)` keeps working.
+export function handleGetLink() {
+	void shareCurrentEqLink();
 }
 
 // Build a shareable URL with the current EQ state encoded in the hash.
@@ -1626,6 +1843,7 @@ function wireModeControl() {
 		// TODO(device-mode): hook into deviceConfig when per-device mode
 		// switching lands. For now this is UI-only + a broadcast event.
 		setOutputMode(mode);
+		saveSession({ outputMode: mode });
 		console.log(`ddpec:mode-changed ${mode}`);
 	};
 	hp.addEventListener("click", () => set("headphone"));
@@ -1647,11 +1865,13 @@ function wireEqDisable() {
 		// dsp.ts grow consumers for ddpec:eq-toggled. For now flip state +
 		// visual + event.
 		setEqEnabled(!isEqEnabled());
+		saveSession({ eqEnabled: isEqEnabled() });
 		paint();
 		console.log(`ddpec:eq-toggled enabled=${isEqEnabled()}`);
 	});
 	sw?.addEventListener("change", () => {
 		setEqEnabled(!!sw.checked);
+		saveSession({ eqEnabled: isEqEnabled() });
 		paint();
 		console.log(`ddpec:eq-toggled enabled=${isEqEnabled()}`);
 	});
@@ -1671,9 +1891,13 @@ function wireBottomPanelTabs() {
 		tab1.setAttribute("aria-selected", String(which === "tabular"));
 		tab2.setAttribute("aria-selected", String(which === "preamp"));
 	};
-	tab1.addEventListener("click", () => paint("tabular"));
+	tab1.addEventListener("click", () => {
+		paint("tabular");
+		saveSession({ bottomPanelTab: "tabular" });
+	});
 	tab2.addEventListener("click", () => {
 		paint("preamp");
+		saveSession({ bottomPanelTab: "preamp" });
 		// TODO(preamp-panel): render a dedicated preamp-gain editor.
 		console.log("TODO: preamp panel");
 	});
@@ -1696,12 +1920,14 @@ function wireLogTray() {
 	};
 	tray.addEventListener("click", () => {
 		tray.classList.toggle("expanded");
+		saveSession({ logTrayExpanded: tray.classList.contains("expanded") });
 		paint();
 	});
 	tray.addEventListener("keydown", (e: KeyboardEvent) => {
 		if (e.key === "Enter" || e.key === " ") {
 			e.preventDefault();
 			tray.classList.toggle("expanded");
+			saveSession({ logTrayExpanded: tray.classList.contains("expanded") });
 			paint();
 		}
 	});
@@ -1756,8 +1982,14 @@ function wireNavTabs() {
 		if (mainEl) mainEl.style.display = "none";
 		devicePane.style.display = "flex";
 	};
-	dspBtn.addEventListener("click", showDsp);
-	devBtn.addEventListener("click", showDevice);
+	dspBtn.addEventListener("click", () => {
+		showDsp();
+		saveSession({ navTab: "dsp" });
+	});
+	devBtn.addEventListener("click", () => {
+		showDevice();
+		saveSession({ navTab: "device" });
+	});
 }
 
 // Commit bar — hide when clean, show when any slot is dirty; mirror the
