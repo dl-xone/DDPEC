@@ -6,6 +6,7 @@ import {
 	initState,
 	onSlotChange,
 	openKeyboardHelp,
+	openPalette,
 	redoAction,
 	swapABSlots,
 	toggleConnection,
@@ -135,6 +136,16 @@ document
 	);
 
 /**
+ * FEATURE 10 — AutoEQ button. Dynamic import keeps the autofit module out
+ * of the initial paint bundle; the handler itself lives in fn.ts.
+ */
+document
+	.getElementById("btnAutoEq")
+	?.addEventListener("click", () =>
+		callFnHandler("handleAutoEq", "AutoEQ: not implemented yet."),
+	);
+
+/**
  * TOP NAV TABS — DSP vs Device Settings. Prefer fn.ts's setActiveNavTab
  * when it lands; fall back to a simple .active class toggle so the UI is
  * still usable during the transition.
@@ -171,6 +182,16 @@ document
  * pre-pivot build; the '?' shortcut replaces the removed header help icon.
  */
 window.addEventListener("keydown", (e) => {
+	// Feature 11 — command palette. Cmd+K / Ctrl+K runs BEFORE the form-input
+	// guard so the palette opens even when focus is inside a text input
+	// (matches VS Code / Linear / Notion behaviour). The palette itself
+	// handles Esc to close, so we don't add a global Esc handler here.
+	if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k" && !e.shiftKey && !e.altKey) {
+		e.preventDefault();
+		openPalette();
+		return;
+	}
+
 	// Ignore while typing in form inputs so we don't hijack text editing.
 	const target = e.target as HTMLElement | null;
 	if (

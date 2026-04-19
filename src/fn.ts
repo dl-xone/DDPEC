@@ -88,6 +88,11 @@ import {
 import type { Band, EQ } from "./main.ts";
 import { renderPEQ, resizeCanvas } from "./peq.ts";
 import {
+	type Command,
+	openPalette,
+	registerCommand,
+} from "./commandPalette.ts";
+import {
 	addBand,
 	defaultEqState,
 	getActiveConfig,
@@ -127,6 +132,10 @@ export {
 	setEqState,
 	setGlobalGainState,
 } from "./state.ts";
+
+// Re-export so main.ts' keyboard handler can open the palette without
+// pulling in commandPalette.ts directly.
+export { openPalette } from "./commandPalette.ts";
 
 export function initState() {
 	renderUI(getEqState());
@@ -233,6 +242,7 @@ export function initState() {
 	wireCommitBar();
 	wireViewToggles();
 	wireExportMenu();
+	registerDefaultCommands();
 }
 
 // Target-curve picker. Distinct from the measurement loader so the two
@@ -685,7 +695,7 @@ export function renderPresetSidebar(filter = "") {
 	}
 }
 
-async function applyPresetFromSidebar(id: string) {
+export async function applyPresetFromSidebar(id: string) {
 	// No device gate — presets apply to in-memory state. When a device is
 	// present we use its config, otherwise we fall back to the default
 	// 8-band layout. Syncing later writes the pre-tuned state to hardware.
@@ -927,6 +937,112 @@ export function confirmPopover(opts: {
 			document.removeEventListener("keydown", onKey, true);
 			pop.remove();
 			resolve(result);
+		}
+		function onOutside(e: MouseEvent) {
+			if (!pop.contains(e.target as Node) && e.target !== anchor) {
+				finish(false);
+			}
+		}
+		function onKey(e: KeyboardEvent) {
+			if (e.key === "Escape") {
+				e.preventDefault();
+				finish(false);
+			}
+		}
+		cancel.addEventListener("click", () => finish(false));
+		confirm.addEventListener("click", () => finish(true));
+		document.addEventListener("mousedown", onOutside, true);
+		document.addEventListener("keydown", onKey, true);
+		setTimeout(() => confirm.focus(), 0);
+	});
+}
+
+// Variant of confirmPopover that includes a single checkbox (e.g. "Refine
+// (tier B)" for the AutoEQ popover). Resolves with `{ confirmed, checked }`.
+// Kept separate from `confirmPopover` so existing boolean-only call sites
+// don't need to branch on the return shape.
+export function confirmPopoverWithCheckbox(opts: {
+	anchor: HTMLElement;
+	message: string;
+	checkboxLabel: string;
+	checkboxDefault?: boolean;
+	confirmLabel?: string;
+	cancelLabel?: string;
+}): Promise<{ confirmed: boolean; checked: boolean }> {
+	const { anchor, message, checkboxLabel } = opts;
+	const confirmLabel = opts.confirmLabel ?? "Confirm";
+	const cancelLabel = opts.cancelLabel ?? "Cancel";
+	const defaultChecked = opts.checkboxDefault !== false;
+	return new Promise((resolve) => {
+		const pop = document.createElement("div");
+		pop.className = "popover";
+		pop.setAttribute("role", "dialog");
+		pop.setAttribute("aria-label", confirmLabel);
+
+		const msg = document.createElement("div");
+		msg.textContent = message;
+		msg.style.fontSize = "12px";
+		msg.style.color = "var(--color-text-1)";
+		msg.style.marginBottom = "10px";
+		msg.style.maxWidth = "260px";
+		pop.appendChild(msg);
+
+		const cbRow = document.createElement("label");
+		cbRow.style.display = "flex";
+		cbRow.style.alignItems = "center";
+		cbRow.style.gap = "6px";
+		cbRow.style.fontSize = "11px";
+		cbRow.style.color = "var(--color-text-2)";
+		cbRow.style.marginBottom = "10px";
+		cbRow.style.cursor = "pointer";
+		const cb = document.createElement("input");
+		cb.type = "checkbox";
+		cb.checked = defaultChecked;
+		const cbText = document.createElement("span");
+		cbText.textContent = checkboxLabel;
+		cbRow.append(cb, cbText);
+		pop.appendChild(cbRow);
+
+		const row = document.createElement("div");
+		row.style.display = "flex";
+		row.style.gap = "8px";
+		row.style.justifyContent = "flex-end";
+
+		const cancel = document.createElement("button");
+		cancel.type = "button";
+		cancel.className = "btn-ghost";
+		cancel.textContent = cancelLabel;
+
+		const confirm = document.createElement("button");
+		confirm.type = "button";
+		confirm.className = "btn-primary";
+		confirm.textContent = confirmLabel;
+
+		row.append(cancel, confirm);
+		pop.appendChild(row);
+
+		document.body.appendChild(pop);
+		const rect = anchor.getBoundingClientRect();
+		const w = pop.offsetWidth;
+		const h = pop.offsetHeight;
+		const left = Math.max(
+			8,
+			Math.min(window.innerWidth - w - 8, rect.right - w),
+		);
+		let top = rect.top - h - 8;
+		if (top < 8) top = Math.min(window.innerHeight - h - 8, rect.bottom + 8);
+		pop.style.left = `${left}px`;
+		pop.style.top = `${top}px`;
+
+		let settled = false;
+		function finish(confirmed: boolean) {
+			if (settled) return;
+			settled = true;
+			document.removeEventListener("mousedown", onOutside, true);
+			document.removeEventListener("keydown", onKey, true);
+			const checked = cb.checked;
+			pop.remove();
+			resolve({ confirmed, checked });
 		}
 		function onOutside(e: MouseEvent) {
 			if (!pop.contains(e.target as Node) && e.target !== anchor) {
@@ -1935,6 +2051,19 @@ function syncViewToggleButtons() {
 	setPressed("btnToggleAbOverlay", s.abOverlay !== "hidden");
 	setPressed("btnToggleDelta", !!s.showDelta);
 	setPressed("btnTogglePhase", !!s.showPhase);
+	// Feature 10 — AutoEQ button only lights up when both a target AND a
+	// measurement are loaded (needed to compute the error vector).
+	const autoEqBtn = document.getElementById("btnAutoEq") as HTMLButtonElement | null;
+	if (autoEqBtn) {
+		const ready = !!getTarget() && !!getMeasurement();
+		autoEqBtn.disabled = !ready;
+		autoEqBtn.setAttribute(
+			"title",
+			ready
+				? "Fit bands to target − measurement"
+				: "Load a target AND a measurement to enable AutoEQ",
+		);
+	}
 	// Feature 9 — update the export button's tooltip with the last-used
 	// format so the click-main-action path doesn't feel like a black box.
 	const exportBtn = document.getElementById("btnExport");
@@ -2135,6 +2264,78 @@ async function applyEqBypassSideEffects() {
 export function toggleEqBypass() {
 	setEqEnabled(!isEqEnabled());
 	void applyEqBypassSideEffects();
+}
+
+// Feature 10 — AutoEQ one-click fit. Pops an anchored confirm popover with
+// a "Refine (tier B)" checkbox (default on). On confirm, computes a fresh
+// band set from `target − measurement` error and replaces the active slot's
+// EQ with it. History snapshot captures the pre-fit bands so undo works.
+export async function handleAutoEq() {
+	const target = getTarget();
+	const measurement = getMeasurement();
+	if (!target || !measurement) {
+		toast("Load a target + measurement first");
+		return;
+	}
+	const anchor = document.getElementById("btnAutoEq") as HTMLElement | null;
+	// Fall back to a generic confirm modal when the button isn't in the DOM
+	// (e.g. command-palette-only invocation on some future layout variant).
+	let confirmed = false;
+	let tierB = true;
+	if (anchor) {
+		const result = await confirmPopoverWithCheckbox({
+			anchor,
+			message: "Fit bands to target − measurement?",
+			checkboxLabel: "Refine (tier B)",
+			checkboxDefault: true,
+			confirmLabel: "Run AutoEQ",
+		});
+		confirmed = result.confirmed;
+		tierB = result.checked;
+	} else {
+		confirmed = await confirmModal(
+			"Fit bands to target − measurement? This replaces your current bands.",
+			{ title: "AutoEQ", confirmLabel: "Run AutoEQ" },
+		);
+	}
+	if (!confirmed) return;
+
+	// Lazy-import so the autofit module loads only when AutoEQ actually runs
+	// — keeps the initial-paint bundle lean.
+	const autofit = await import("./autofit.ts");
+	const currentBands = getEqState();
+	const before = autofit.fitMse(target, measurement, currentBands);
+	const cap = getBandCountCap();
+	const newBands = autofit.autoFitBands(target, measurement, currentBands, {
+		tierB,
+		maxBands: cap.max,
+	});
+	const after = autofit.fitMse(target, measurement, newBands);
+
+	snapshot();
+	setEqState(newBands);
+	renderUI(getEqState());
+	updateHistoryButtons();
+	const cfg = getActiveConfig();
+	if (cfg) persistProfile(cfg.key);
+
+	// Auto-sync to device if one is connected so the user hears the fit
+	// immediately without a second click.
+	if (getDevice()) {
+		try {
+			await syncToDevice();
+			markSynced(getActiveSlot());
+		} catch (err) {
+			log(`Auto-sync after AutoEQ failed: ${(err as Error).message}`);
+		}
+	}
+
+	toast(
+		`AutoEQ fit complete (${newBands.length} band${newBands.length === 1 ? "" : "s"}, MSE ${before.toFixed(2)} → ${after.toFixed(2)} dB²)`,
+	);
+	log(
+		`AutoEQ: ${newBands.length} bands placed (tier ${tierB ? "A+B" : "A"}), MSE ${before.toFixed(3)} → ${after.toFixed(3)} dB².`,
+	);
 }
 
 function wireEqDisable() {
@@ -2602,3 +2803,215 @@ function wireCommitBar() {
 // `setDirty(bool)` lives in state.ts (see that file). Re-export so callers
 // that already pull symbols from fn.ts keep a single import surface.
 export { setDirty } from "./state.ts";
+
+// Feature 11 — register every command the palette surfaces. Called once
+// from initState(). Commands close over live state via `availableWhen`
+// callbacks rather than capturing booleans, so "Connect device" hides the
+// moment a device arrives and reappears when it leaves.
+//
+// Preset commands are synthesized at palette-open time via a `keywords`
+// flag: we register a sentinel "load-preset" dispatcher and, additionally,
+// one command per preset present at init time. Presets added later won't
+// appear until next reload — acceptable MVP trade-off; the plan deferred
+// lazy re-registration.
+function registerDefaultCommands() {
+	const cmds: Command[] = [
+		{
+			id: "device.connect",
+			title: "Connect device",
+			keywords: ["pair", "hid", "usb"],
+			run: () => toggleConnection(),
+			availableWhen: () => !getDevice(),
+		},
+		{
+			id: "device.disconnect",
+			title: "Disconnect device",
+			keywords: ["unpair"],
+			run: () => toggleConnection(),
+			availableWhen: () => !!getDevice(),
+		},
+		{
+			id: "device.sync",
+			title: "Sync to RAM",
+			keywords: ["push", "apply", "write"],
+			run: () => handleSyncClick(),
+			availableWhen: () => !!getDevice(),
+		},
+		{
+			id: "device.flash",
+			title: "Save to flash",
+			keywords: ["persist", "save", "commit"],
+			run: () => handleFlashClick(),
+			availableWhen: () => !!getDevice(),
+		},
+		{
+			id: "slot.swap",
+			title: "Swap A \u2194 B slots",
+			keywords: ["toggle", "a b"],
+			shortcut: "Alt+S",
+			run: () => swapABSlots(),
+		},
+		{
+			id: "history.undo",
+			title: "Undo",
+			shortcut: "\u2318Z",
+			run: () => undoAction(),
+		},
+		{
+			id: "history.redo",
+			title: "Redo",
+			shortcut: "\u21E7\u2318Z",
+			run: () => redoAction(),
+		},
+		{
+			id: "export.json",
+			title: "Export as JSON",
+			keywords: ["download", "share"],
+			run: () => runExport("json"),
+		},
+		{
+			id: "export.rew",
+			title: "Export as REW",
+			keywords: ["download"],
+			run: () => runExport("rew"),
+		},
+		{
+			id: "export.eapo",
+			title: "Export as EqualizerAPO",
+			keywords: ["equalizer apo", "download"],
+			run: () => runExport("eapo"),
+		},
+		{
+			id: "export.wavelet",
+			title: "Export as Wavelet",
+			keywords: ["download"],
+			run: () => runExport("wavelet"),
+		},
+		{
+			id: "export.camilla",
+			title: "Export as CamillaDSP",
+			keywords: ["camilla", "yaml", "download"],
+			run: () => runExport("camilla"),
+		},
+		{
+			id: "export.peace",
+			title: "Export as Peace",
+			keywords: ["download"],
+			run: () => runExport("peace"),
+		},
+		{
+			id: "import.file",
+			title: "Import preset from file",
+			keywords: ["load", "json"],
+			run: () => {
+				const input = document.getElementById("fileInput") as HTMLInputElement | null;
+				input?.click();
+			},
+		},
+		{
+			id: "target.load",
+			title: "Load target curve\u2026",
+			keywords: ["harman", "curve"],
+			run: () => openTargetLoader(),
+		},
+		{
+			id: "measurement.load",
+			title: "Load FR overlay\u2026",
+			keywords: ["measurement", "frequency response"],
+			run: () => openMeasurementLoader(),
+		},
+		{
+			id: "autoeq.browse",
+			title: "Browse AutoEQ database\u2026",
+			keywords: ["headphones", "catalog"],
+			run: () => browseAutoEq(),
+		},
+		{
+			id: "squiglink.browse",
+			title: "Browse squig.link\u2026",
+			keywords: ["reviewers", "measurements"],
+			run: () => {
+				void browseSquigLink((text, name) => {
+					try {
+						const parsed = parseMeasurement(text, name);
+						setMeasurement(normalizeAt(parsed, 1000));
+						renderUI(getEqState());
+						log(`Loaded FR: ${name} (${parsed.points.length} points).`);
+					} catch (err) {
+						log(`FR parse error: ${(err as Error).message}`);
+					}
+				}).catch((err: Error) => log(`squig.link error: ${err.message}`));
+			},
+		},
+		{
+			id: "eq.bypass",
+			title: "Toggle EQ bypass",
+			keywords: ["disable", "enable", "mute"],
+			shortcut: "Space",
+			run: () => toggleEqBypass(),
+		},
+		{
+			id: "view.phase",
+			title: "Toggle phase response view",
+			keywords: ["overlay"],
+			run: () => togglePhaseView(),
+		},
+		{
+			id: "view.abOverlay",
+			title: "Toggle A/B overlay",
+			keywords: ["inactive slot"],
+			run: () => toggleAbOverlay(),
+		},
+		{
+			id: "view.delta",
+			title: "Toggle delta line",
+			keywords: ["difference", "a minus b"],
+			run: () => toggleDelta(),
+		},
+		{
+			id: "autoeq.fit",
+			title: "AutoEQ fit bands",
+			keywords: ["auto", "fit", "target"],
+			run: () => handleAutoEq(),
+			availableWhen: () => !!getTarget() && !!getMeasurement(),
+		},
+		{
+			id: "state.reset",
+			title: "Reset to defaults",
+			keywords: ["factory", "clear"],
+			run: () => resetToDefaults(),
+		},
+		{
+			id: "help.keyboard",
+			title: "Open keyboard help",
+			keywords: ["shortcuts", "hotkeys"],
+			shortcut: "?",
+			run: () => openKeyboardHelp(),
+		},
+		{
+			id: "palette.open",
+			title: "Open command palette",
+			keywords: ["commands"],
+			shortcut: "\u2318K",
+			run: () => openPalette(),
+		},
+	];
+	for (const cmd of cmds) registerCommand(cmd);
+
+	// Synthesize one command per preset present at init time. Using
+	// `getAllPresets()` includes both built-ins and anything already in
+	// localStorage. Saving a new preset later won't surface here until
+	// the user reloads — accepted MVP trade-off per the plan.
+	for (const preset of getAllPresets()) {
+		registerCommand({
+			id: `preset.load.${preset.id}`,
+			title: `Load preset: ${preset.name}`,
+			keywords: ["preset", preset.description ?? ""],
+			run: () => applyPresetFromSidebar(preset.id),
+		});
+	}
+}
+
+// Call once from initState so the palette has commands on first open.
+// Exported to make unit-level re-registration cheap in tests.
+export { registerDefaultCommands };

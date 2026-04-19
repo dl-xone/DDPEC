@@ -775,3 +775,83 @@ button.btn-ghost-icon.toggle-on:hover:not(:disabled) {
 	--color-delta: #7560b0;
 	--color-phase: #3d8a6f;
 }
+
+/* Feature 11 — command palette modal. Built with <dialog> so focus +
+   Escape are handled by the platform. The backdrop gets a 40% black wash. */
+dialog.command-palette {
+	background: var(--color-surface-1);
+	color: var(--color-text-1);
+	border: 1px solid var(--color-border);
+	border-radius: 6px;
+	padding: 0;
+	width: min(520px, 92vw);
+	max-height: 60vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+dialog.command-palette::backdrop {
+	background: rgba(0, 0, 0, 0.4);
+}
+.command-palette-input {
+	background: transparent;
+	border: 0;
+	border-bottom: 1px solid var(--color-border);
+	color: var(--color-text-1);
+	font-size: 14px;
+	padding: 14px 16px;
+	outline: none;
+	font-family: inherit;
+}
+.command-palette-input::placeholder {
+	color: var(--color-text-3);
+}
+.command-palette-list {
+	overflow-y: auto;
+	max-height: calc(60vh - 50px);
+	padding: 4px 0;
+	display: flex;
+	flex-direction: column;
+}
+.command-palette-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+	padding: 8px 16px;
+	background: transparent;
+	border: 0;
+	color: var(--color-text-1);
+	font-size: 13px;
+	font-family: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+.command-palette-row.is-selected {
+	background: var(--color-accent-dim);
+	color: var(--color-accent);
+}
+.command-palette-row:hover {
+	background: var(--color-surface-2);
+}
+.command-palette-title {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.command-palette-shortcut {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	color: var(--color-text-3);
+	letter-spacing: 0.04em;
+	padding-left: 12px;
+	flex-shrink: 0;
+}
+.command-palette-empty {
+	padding: 12px 16px;
+	font-size: 12px;
+	color: var(--color-text-3);
+}
