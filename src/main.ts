@@ -9,6 +9,7 @@ import {
 	redoAction,
 	swapABSlots,
 	toggleConnection,
+	toggleEqBypass,
 	undoAction,
 } from "./fn.ts";
 import { initTheme } from "./theme.ts";
@@ -183,6 +184,15 @@ window.addEventListener("keydown", (e) => {
 	}
 
 	const key = e.key.toLowerCase();
+
+	// Space: toggle EQ bypass. Quick A/B of "with EQ" vs "raw" without
+	// hunting for the sidebar button. Guarded above so typing a space
+	// inside a form input still writes a literal space.
+	if (e.key === " " && !e.ctrlKey && !e.metaKey && !e.altKey) {
+		e.preventDefault();
+		toggleEqBypass();
+		return;
+	}
 
 	// Alt+S: swap A ↔ B. Alt avoids conflict with Cmd+S save dialogs.
 	if (e.altKey && key === "s") {

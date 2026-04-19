@@ -57,6 +57,49 @@ describe("computeBiquad", () => {
 		expect(magnitudeDb(c, 16000, SR)).toBeCloseTo(6, 0);
 		expect(magnitudeDb(c, 100, SR)).toBeCloseTo(0, 1);
 	});
+
+	// Gainless filter types — each should ignore `band.gain` entirely and
+	// produce the classic RBJ shape keyed off Fc and Q.
+	it("high-pass is -3 dB at Fc with Q=0.707 and unity well above", () => {
+		const c = computeBiquad(
+			band({ freq: 1000, gain: 99, q: Math.SQRT1_2, type: "HPQ" }),
+			SR,
+		);
+		expect(magnitudeDb(c, 1000, SR)).toBeCloseTo(-3, 1);
+		expect(magnitudeDb(c, 16000, SR)).toBeCloseTo(0, 1);
+		// Well below Fc → strongly attenuated.
+		expect(magnitudeDb(c, 50, SR)).toBeLessThan(-20);
+	});
+
+	it("low-pass is -3 dB at Fc with Q=0.707 and unity well below", () => {
+		const c = computeBiquad(
+			band({ freq: 1000, gain: 99, q: Math.SQRT1_2, type: "LPQ" }),
+			SR,
+		);
+		expect(magnitudeDb(c, 1000, SR)).toBeCloseTo(-3, 1);
+		expect(magnitudeDb(c, 50, SR)).toBeCloseTo(0, 1);
+		expect(magnitudeDb(c, 16000, SR)).toBeLessThan(-20);
+	});
+
+	it("notch is very deep at centre and unity away from Fc", () => {
+		const c = computeBiquad(
+			band({ freq: 1000, gain: 99, q: 5, type: "NO" }),
+			SR,
+		);
+		expect(magnitudeDb(c, 1000, SR)).toBeLessThan(-40);
+		expect(magnitudeDb(c, 100, SR)).toBeCloseTo(0, 1);
+		expect(magnitudeDb(c, 8000, SR)).toBeCloseTo(0, 1);
+	});
+
+	it("band-pass (CPG) is 0 dB at centre and rolls off either side", () => {
+		const c = computeBiquad(
+			band({ freq: 1000, gain: 99, q: 1, type: "BPQ" }),
+			SR,
+		);
+		expect(magnitudeDb(c, 1000, SR)).toBeCloseTo(0, 1);
+		expect(magnitudeDb(c, 100, SR)).toBeLessThan(-10);
+		expect(magnitudeDb(c, 10000, SR)).toBeLessThan(-10);
+	});
 });
 
 describe("toProtocolCoeffs", () => {

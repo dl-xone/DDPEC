@@ -16,6 +16,15 @@ export interface BiquadCoeffs {
 
 const Q30_SCALE = 1073741824; // 2^30
 
+// Filter types that apply a user-specified gain (in dB). Gainless types
+// (HPQ/LPQ/NO/BPQ) derive their shape from Fc and Q only — the UI swaps
+// their gain input for a muted em-dash and `computeBiquad` never reads
+// `band.gain` for those branches.
+const GAINFUL_TYPES = new Set(["PK", "LSQ", "HSQ"]);
+export function typeHasGain(type: string): boolean {
+	return GAINFUL_TYPES.has(type);
+}
+
 export function computeBiquad(band: Band, sampleRate: number): BiquadCoeffs {
 	if (!band.enabled) {
 		return { b0: 1, b1: 0, b2: 0, a1: 0, a2: 0 };
@@ -23,6 +32,8 @@ export function computeBiquad(band: Band, sampleRate: number): BiquadCoeffs {
 
 	const w0 = (2 * Math.PI * band.freq) / sampleRate;
 	const alpha = Math.sin(w0) / (2 * band.q);
+	// Gainless filter types (HPQ/LPQ/NO/BPQ) don't reference `A`. It's cheap
+	// to compute so we still derive it for the gain-using branches below.
 	const A = 10 ** (band.gain / 40);
 	const cosw = Math.cos(w0);
 
@@ -62,6 +73,46 @@ export function computeBiquad(band: Band, sampleRate: number): BiquadCoeffs {
 			a0 = A + 1 - (A - 1) * cosw + sb;
 			a1 = 2 * (A - 1 - (A + 1) * cosw);
 			a2 = A + 1 - (A - 1) * cosw - sb;
+			break;
+		}
+		case "HPQ": {
+			// High-pass, Q-parameterised. RBJ cookbook: gainless.
+			b0 = (1 + cosw) / 2;
+			b1 = -(1 + cosw);
+			b2 = (1 + cosw) / 2;
+			a0 = 1 + alpha;
+			a1 = -2 * cosw;
+			a2 = 1 - alpha;
+			break;
+		}
+		case "LPQ": {
+			// Low-pass, Q-parameterised. RBJ cookbook: gainless.
+			b0 = (1 - cosw) / 2;
+			b1 = 1 - cosw;
+			b2 = (1 - cosw) / 2;
+			a0 = 1 + alpha;
+			a1 = -2 * cosw;
+			a2 = 1 - alpha;
+			break;
+		}
+		case "NO": {
+			// Notch. RBJ cookbook: gainless.
+			b0 = 1;
+			b1 = -2 * cosw;
+			b2 = 1;
+			a0 = 1 + alpha;
+			a1 = -2 * cosw;
+			a2 = 1 - alpha;
+			break;
+		}
+		case "BPQ": {
+			// Band-pass, constant-0-peak-gain (CPG) variant. Gainless.
+			b0 = alpha;
+			b1 = 0;
+			b2 = -alpha;
+			a0 = 1 + alpha;
+			a1 = -2 * cosw;
+			a2 = 1 - alpha;
 			break;
 		}
 		default:

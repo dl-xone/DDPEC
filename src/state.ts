@@ -55,6 +55,41 @@ function broadcastDirty() {
 	}
 }
 
+// Feature 4 — "changed vs preset" dot. Snapshotting the loaded preset's
+// band tuple lets the canvas decorate bands the user has since edited.
+// Null means no preset is the baseline (fresh session or factory reset) —
+// in that state, nothing draws, so a blank app doesn't spam dots.
+let loadedPresetSnapshot: Band[] | null = null;
+
+export function setLoadedPresetSnapshot(bands: Band[] | null) {
+	loadedPresetSnapshot = bands ? structuredClone(bands) : null;
+}
+
+export function getLoadedPresetSnapshot(): Band[] | null {
+	return loadedPresetSnapshot;
+}
+
+// Compare the live band at `bandIndex` (hardware slot / band.index, not
+// array position — so sort shuffles don't fool us) against the snapshot.
+// Excludes `enabled` so the solo/mute toggle doesn't spam dots, and
+// excludes `index` itself (which is identity, not tuning). A band added
+// after the preset loaded has no snapshot entry → counts as "changed".
+export function isBandChangedVsPreset(bandIndex: number): boolean {
+	if (!loadedPresetSnapshot) return false;
+	const live = state.slots[state.activeSlot].eq.find(
+		(b) => b.index === bandIndex,
+	);
+	if (!live) return false;
+	const snap = loadedPresetSnapshot.find((b) => b.index === bandIndex);
+	if (!snap) return true; // new band post-preset-load → changed.
+	return (
+		live.freq !== snap.freq ||
+		live.gain !== snap.gain ||
+		live.q !== snap.q ||
+		live.type !== snap.type
+	);
+}
+
 // JDS pivot: soft-global "EQ enabled" flag. Consumers (peq.ts / dsp.ts) can
 // read via `isEqEnabled()` and listen for `ddpec:eq-toggled`. Default on.
 let eqEnabled = true;

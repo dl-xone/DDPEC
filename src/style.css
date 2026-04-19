@@ -185,6 +185,21 @@ button.btn-icon:focus-visible {
 	appearance: auto;
 }
 
+/* Gainless filter types (HP/LP/NO/BP) render a muted em-dash in place of
+   the gain input. Keep the input element for grid stability but dim it
+   heavily and hide spinners so it reads as a placeholder. */
+.num-input.gain-cell-dash {
+	color: var(--color-text-3);
+	background: transparent;
+	text-align: center;
+	cursor: default;
+}
+.num-input.gain-cell-dash::-webkit-outer-spin-button,
+.num-input.gain-cell-dash::-webkit-inner-spin-button {
+	-webkit-appearance: none;
+	opacity: 0;
+}
+
 /* Preset list row */
 .preset-row {
 	@apply flex items-center justify-between px-3 py-2 rounded cursor-pointer text-sm transition-colors;

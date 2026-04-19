@@ -7,6 +7,7 @@ import {
 	syncToDevice,
 } from "./dsp.ts";
 import {
+	computeClippingHeadroom,
 	enableControls,
 	log,
 	setAppOffline,
@@ -103,6 +104,7 @@ import {
 	setEqEnabled,
 	setEqState,
 	setGlobalGainState,
+	setLoadedPresetSnapshot,
 	type SlotName,
 	swapSlots,
 } from "./state.ts";
@@ -298,6 +300,7 @@ export function openKeyboardHelp() {
 	content.className = "flex flex-col gap-2 text-sm";
 	const rows: Array<[string, string]> = [
 		["?", "Open this help"],
+		["Space", "Toggle EQ bypass"],
 		["Cmd/Ctrl + Z", "Undo"],
 		["Shift+Cmd/Ctrl + Z", "Redo"],
 		["Cmd/Ctrl + Y", "Redo (alt)"],
@@ -453,10 +456,37 @@ export function renderUI(eqState: EQ) {
 			inactiveBands: getInactiveEq(),
 			onAddBand: addBandHandler,
 			onRemoveBand: removeBandHandler,
+			onDeleteBand: deleteBandHandler,
 			getBandCountCap: getBandCountCap,
 		},
 	);
 	updateSlotUI();
+}
+
+// Feature 3 — drag-off-canvas delete. Same history + persistence spine as
+// `removeBandHandler` but targets a specific array index (the band that
+// was dragged). No-op if removing would take us below the min band count.
+export function deleteBandHandler(arrayIdx: number) {
+	const cap = getBandCountCap();
+	const eq = getEqState();
+	if (eq.length <= cap.min) {
+		toast(`Min ${cap.min} band${cap.min === 1 ? "" : "s"} required`);
+		// Still redraw so the band returns to its pre-drag position instead
+		// of hanging wherever the pointer left it.
+		renderUI(getEqState());
+		return;
+	}
+	if (arrayIdx < 0 || arrayIdx >= eq.length) return;
+	snapshot();
+	const removed = removeBandAt(arrayIdx);
+	renderUI(getEqState());
+	updateHistoryButtons();
+	const cfg = getActiveConfig();
+	if (cfg) persistProfile(cfg.key);
+	if (removed) {
+		toast(`Removed band ${Math.round(removed.freq)} Hz`);
+		log(`Removed band at ${Math.round(removed.freq)} Hz (dragged off canvas).`);
+	}
 }
 
 // Band-count cap. Connected → device's maxFilters (hardware floor for
@@ -659,6 +689,9 @@ async function applyPresetFromSidebar(id: string) {
 	if (typeof preset.preamp === "number" && !cfg?.autoGlobalGain) {
 		setGlobalGain(preset.preamp);
 	}
+	// Feature 4 — record the preset's values as the "changed vs preset"
+	// baseline so subsequent edits decorate their bands with the dot.
+	setLoadedPresetSnapshot(getEqState());
 	saveSession({ selectedPresetId: preset.id });
 	renderPresetSidebar(
 		(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
@@ -1613,6 +1646,9 @@ export async function resetToDefaults() {
 	snapshot();
 	setEqState(defaultEqState(getActiveConfig()));
 	setGlobalGain(0);
+	// Feature 4 — no preset is the baseline after a factory reset, so the
+	// "changed vs preset" dots stay suppressed until the user loads one.
+	setLoadedPresetSnapshot(null);
 	renderUI(getEqState());
 	updateHistoryButtons();
 
@@ -1674,6 +1710,7 @@ export async function openPresetPicker() {
 	if (typeof preset.preamp === "number" && !cfg?.autoGlobalGain) {
 		setGlobalGain(preset.preamp);
 	}
+	setLoadedPresetSnapshot(getEqState());
 	renderUI(getEqState());
 	updateHistoryButtons();
 	if (cfg) persistProfile(cfg.key);
@@ -1781,10 +1818,14 @@ export function handleSaveAsNew() {
 		preamp: getGlobalGainState(),
 	});
 	saveSession({ selectedPresetId: preset.id });
+	// After saving, the current EQ IS the preset baseline — suppress dots
+	// until the user edits again. Same principle for Update Preset below.
+	setLoadedPresetSnapshot(getEqState());
 	renderPresetSidebar(
 		(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
 			"",
 	);
+	renderUI(getEqState());
 	toast(`Preset saved: ${preset.name}`);
 	log(`Saved preset "${preset.name}".`);
 }
@@ -1803,10 +1844,12 @@ export function handleUpdatePreset() {
 		toast("Preset not found");
 		return;
 	}
+	setLoadedPresetSnapshot(getEqState());
 	renderPresetSidebar(
 		(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
 			"",
 	);
+	renderUI(getEqState());
 	toast(`Updated: ${updated.name}`);
 	log(`Updated preset "${updated.name}".`);
 }
@@ -1849,8 +1892,28 @@ async function shareCurrentEqLink() {
 		const json = JSON.stringify(payload);
 		const b64 = btoa(unescape(encodeURIComponent(json)));
 		const url = `${location.origin}${location.pathname}#eq=${b64}`;
+
+		// Feature 6 — try the Web Share API first on supporting platforms
+		// (iOS Safari, Android Chrome, some desktop Chromium builds). Users
+		// get the native share sheet, which routes to Messages/Mail/etc.
+		// A plain clipboard copy is the fallback on desktops without it.
+		if (typeof navigator.share === "function") {
+			try {
+				await navigator.share({ title: "DDPEC preset", url });
+				toast("Share sheet opened");
+				log(`Share sheet invoked (${b64.length} chars).`);
+				return;
+			} catch (err) {
+				// AbortError = user dismissed the sheet; stay silent.
+				if ((err as DOMException)?.name === "AbortError") return;
+				// Any other failure (permissions, unsupported scheme) falls
+				// through to the clipboard path below so the user still
+				// gets a link somewhere useful.
+			}
+		}
+
 		await navigator.clipboard.writeText(url);
-		toast("Share link copied to clipboard");
+		toast("Link copied");
 		log(`Share link generated (${b64.length} chars).`);
 	} catch (err) {
 		log(`Share link failed: ${(err as Error).message}`);
@@ -1866,6 +1929,40 @@ async function shareCurrentEqLink() {
 //  - peq.ts renders the curve in muted color + 0 dB reference line.
 //  - When a device is connected, we auto-sync so the new bypass state
 //    reaches the hardware immediately (no extra Sync click needed).
+// Shared apply-logic for any surface that flips EQ bypass. Requeries the
+// DOM on each call so callers without captured refs (Space-bar handler in
+// main.ts) can trigger the exact same UI + device + session side effects.
+// Order matters: flip the session flag first so the repaint sees the new
+// state, then paint the button/switch, then repaint the canvas + toast,
+// then fire the auto-sync if a device is attached.
+async function applyEqBypassSideEffects() {
+	const on = isEqEnabled();
+	const btn = document.getElementById("btnDisableEq") as HTMLButtonElement | null;
+	const sw = document.getElementById("eqEnabledSwitch") as HTMLInputElement | null;
+	if (sw && sw.checked !== on) sw.checked = on;
+	if (btn) btn.textContent = on ? "Disable EQ" : "Enable EQ";
+	saveSession({ eqEnabled: on });
+	renderUI(getEqState()); // repaint canvas with muted / live colors
+	toast(on ? "EQ enabled" : "EQ bypassed");
+	// Auto-flush to device so the new bypass state takes effect.
+	if (getDevice()) {
+		try {
+			await syncToDevice();
+			markSynced(getActiveSlot());
+		} catch (err) {
+			log(`Auto-sync after EQ toggle failed: ${(err as Error).message}`);
+		}
+	}
+}
+
+// Flip the global EQ-enabled flag and run the shared side effects. Exported
+// so the keyboard shortcut in main.ts (Space) can share the same code path
+// as the sidebar button and bottom switch.
+export function toggleEqBypass() {
+	setEqEnabled(!isEqEnabled());
+	void applyEqBypassSideEffects();
+}
+
 function wireEqDisable() {
 	const btn = document.getElementById("btnDisableEq") as HTMLButtonElement | null;
 	const sw = document.getElementById("eqEnabledSwitch") as HTMLInputElement | null;
@@ -1874,29 +1971,12 @@ function wireEqDisable() {
 		if (sw && sw.checked !== on) sw.checked = on;
 		if (btn) btn.textContent = on ? "Disable EQ" : "Enable EQ";
 	};
-	const apply = async () => {
-		const on = isEqEnabled();
-		saveSession({ eqEnabled: on });
-		paint();
-		renderUI(getEqState()); // repaint canvas with muted / live colors
-		toast(on ? "EQ enabled" : "EQ bypassed");
-		// Auto-flush to device so the new bypass state takes effect.
-		if (getDevice()) {
-			try {
-				await syncToDevice();
-				markSynced(getActiveSlot());
-			} catch (err) {
-				log(`Auto-sync after EQ toggle failed: ${(err as Error).message}`);
-			}
-		}
-	};
-	btn?.addEventListener("click", () => {
-		setEqEnabled(!isEqEnabled());
-		void apply();
-	});
+	btn?.addEventListener("click", () => toggleEqBypass());
 	sw?.addEventListener("change", () => {
+		// The switch drives the flag directly (not a toggle) so checking and
+		// unchecking via click both reach the shared side-effect path.
 		setEqEnabled(!!sw.checked);
-		void apply();
+		void applyEqBypassSideEffects();
 	});
 	paint();
 }
@@ -1913,6 +1993,9 @@ function wireBottomPanelTabs() {
 	let preampValueInput: HTMLInputElement | null = null;
 	let preampSlider: HTMLInputElement | null = null;
 	let preampPeakHint: HTMLElement | null = null;
+	// Feature 5 — warning icon span sitting next to the Pre-amp label.
+	// Null until the preamp pane is first built (lazy).
+	let preampClipWarn: HTMLElement | null = null;
 
 	const getTabularParts = () => {
 		const container = document.getElementById("eqContainer");
@@ -1933,6 +2016,20 @@ function wireBottomPanelTabs() {
 			if (b.gain > peak) peak = b.gain;
 		}
 		preampPeakHint.textContent = `Negative preamp headroom prevents digital clipping when boosting bands. Current peak boost: +${peak.toFixed(1)} dB.`;
+
+		// Feature 5 — toggle the inline clipping warning. Tooltip spells
+		// out the exact deficit so the user can dial the preamp to clear it.
+		if (preampClipWarn) {
+			const headroom = computeClippingHeadroom(bands, getGlobalGainState());
+			if (headroom < 0) {
+				const deficit = Math.abs(headroom).toFixed(1);
+				preampClipWarn.hidden = false;
+				preampClipWarn.title = `Summed band boosts exceed pre-amp headroom. Reduce gains or lower pre-amp by ${deficit} dB.`;
+			} else {
+				preampClipWarn.hidden = true;
+				preampClipWarn.title = "";
+			}
+		}
 	};
 
 	const buildPreampPane = (): HTMLElement => {
@@ -1940,10 +2037,39 @@ function wireBottomPanelTabs() {
 		pane.id = "preampPane";
 		pane.className = "preamp-pane";
 
-		const label = document.createElement("div");
-		label.className = "label";
+		// Label row — text plus the Feature 5 clipping warning icon. Row
+		// stays a block-level flex so the icon stays on the same baseline
+		// without shifting the slider below.
+		const labelRow = document.createElement("div");
+		labelRow.className = "label flex items-center gap-2";
+		const label = document.createElement("span");
 		label.textContent = "Pre-amp Gain";
-		pane.appendChild(label);
+		labelRow.appendChild(label);
+
+		const warn = document.createElement("span");
+		warn.id = "preampClipWarning";
+		warn.hidden = true;
+		warn.setAttribute("aria-label", "Clipping warning");
+		warn.style.color = "var(--color-warning, #e5b850)";
+		warn.style.display = "inline-flex";
+		warn.style.alignItems = "center";
+		// Build the SVG via DOM methods so no innerHTML is used.
+		const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		svg.setAttribute("width", "14");
+		svg.setAttribute("height", "14");
+		svg.setAttribute("viewBox", "0 0 24 24");
+		svg.setAttribute("fill", "currentColor");
+		svg.setAttribute("aria-hidden", "true");
+		const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+		path.setAttribute(
+			"d",
+			"M12 2 1 21h22L12 2zm0 6 7.53 13H4.47L12 8zm-1 4v4h2v-4h-2zm0 6v2h2v-2h-2z",
+		);
+		svg.appendChild(path);
+		warn.appendChild(svg);
+		labelRow.appendChild(warn);
+		preampClipWarn = warn;
+		pane.appendChild(labelRow);
 
 		const value = document.createElement("input");
 		value.type = "number";

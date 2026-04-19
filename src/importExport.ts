@@ -9,6 +9,7 @@ import {
 	getGlobalGainState,
 	setEqState,
 	setGlobalGainState,
+	setLoadedPresetSnapshot,
 } from "./state.ts";
 
 interface ProfileData {
@@ -16,8 +17,9 @@ interface ProfileData {
 	bands: EQ;
 }
 
-// REW / Equalizer APO use short tokens (PK, LS, HS, LSC, HSC); internally
-// we store the Q-width shelf variants LSQ/HSQ. Treat unknown tokens as PK
+// REW / Equalizer APO use short tokens (PK, LS, HS, LSC, HSC, HP, LP,
+// BP, NO, …); internally we store the Q-width shelf variants LSQ/HSQ
+// and Q-parameterised HPQ/LPQ/BPQ plus NO. Treat unknown tokens as PK
 // with a warning rather than silently passing through a garbage type.
 const REW_TYPE_MAP: Record<string, Band["type"]> = {
 	PK: "PK",
@@ -27,6 +29,15 @@ const REW_TYPE_MAP: Record<string, Band["type"]> = {
 	HS: "HSQ",
 	HSQ: "HSQ",
 	HSC: "HSQ",
+	HP: "HPQ",
+	HPQ: "HPQ",
+	LP: "LPQ",
+	LPQ: "LPQ",
+	BP: "BPQ",
+	BPQ: "BPQ",
+	PBQ: "BPQ",
+	NO: "NO",
+	NOTCH: "NO",
 };
 
 /**
@@ -109,9 +120,10 @@ function parseTextProfile(content: string): ProfileData {
 	const preampRegex = /^Preamp:\s*(-?\d+(\.\d+)?)\s*(?:dB)?/i;
 
 	// Regex for Filter: "Filter 1: ON PK Fc 34 Hz Gain -2.6 dB Q 0.800"
-	// Groups: 1=Index, 2=State(ON/OFF), 3=Type, 4=Fc, 5=Gain, 6=Q
+	// Groups: 1=Index, 2=State(ON/OFF), 3=Type, 4=Fc, 5=Gain (optional for
+	// gainless HP/LP/NO/BP), 6=Q.
 	const filterRegex =
-		/^Filter\s+(\d+):\s+(ON|OFF)\s+([A-Z]+)\s+Fc\s+(\d+(?:\.\d+)?)\s*(?:Hz)?\s+Gain\s+(-?\d+(?:\.\d+)?)\s*(?:dB)?\s+Q\s+(\d+(?:\.\d+)?)/i;
+		/^Filter\s+(\d+):\s+(ON|OFF)\s+([A-Z]+)\s+Fc\s+(\d+(?:\.\d+)?)\s*(?:Hz)?(?:\s+Gain\s+(-?\d+(?:\.\d+)?)\s*(?:dB)?)?\s+Q\s+(\d+(?:\.\d+)?)/i;
 
 	for (const line of lines) {
 		const trimmed = line.trim();
@@ -136,7 +148,10 @@ function parseTextProfile(content: string): ProfileData {
 					);
 				}
 				const freq = parseFloat(filterMatch[4]);
-				const gain = parseFloat(filterMatch[5]);
+				// Gain is optional — gainless filter types (HP/LP/NO/BP) may
+				// omit it in REW-format exports. Default to 0 when absent.
+				const gain =
+					filterMatch[5] !== undefined ? parseFloat(filterMatch[5]) : 0;
 				const q = parseFloat(filterMatch[6]);
 
 				bands[index] = {
@@ -174,6 +189,9 @@ export function applyProfileText(text: string, sourceName: string) {
 	setEqState(fitted);
 	setGlobalGainState(profile.globalGain);
 	updateGlobalGain(profile.globalGain);
+	// Feature 4 — treat the just-imported profile as the new preset baseline
+	// so subsequent edits earn the "changed vs preset" dot.
+	setLoadedPresetSnapshot(fitted);
 	renderUI(fitted);
 	log(`Profile imported: ${sourceName}. Click 'SYNC' to apply.`);
 }

@@ -1,9 +1,9 @@
 import { SAMPLE_RATE } from "./constants.ts";
-import { computeBiquad, magnitudeDb } from "./dsp/biquad.ts";
+import { computeBiquad, magnitudeDb, typeHasGain } from "./dsp/biquad.ts";
 import type { Band } from "./main.ts";
 import { measurementDbAt, targetDbAt } from "./measurements.ts";
 import peqTemplate from "./peq.template.html?raw";
-import { isEqEnabled } from "./state.ts";
+import { getLoadedPresetSnapshot, isBandChangedVsPreset, isEqEnabled } from "./state.ts";
 
 /**
  * CONFIG & CONSTANTS
@@ -16,10 +16,16 @@ const CONFIG = {
 	padding: 40,
 };
 
+// Insertion order drives the `<select>` dropdown order. Keep gainful types
+// first (Peaking / shelves), then gainless filters.
 const BAND_TYPE_LABELS: Record<string, string> = {
 	PK: "Peaking",
 	LSQ: "Low Shelf",
 	HSQ: "High Shelf",
+	HPQ: "High-pass",
+	LPQ: "Low-pass",
+	BPQ: "Band-pass",
+	NO: "Notch",
 };
 
 // Read a CSS custom property from :root so canvas drawing tracks
@@ -49,7 +55,28 @@ let onUpdateCallback:
 // header's +/- buttons hide so the band-count UI can stay off for tests.
 let onAddBandCallback: (() => void) | null = null;
 let onRemoveBandCallback: (() => void) | null = null;
+let onDeleteBandCallback: ((arrayIdx: number) => void) | null = null;
 let getBandCountCapCallback: (() => { min: number; max: number }) | null = null;
+
+// Feature 3 — solo/mute + ergonomic wins. `soloedIndex` points at a band's
+// hardware slot (band.index) so sort shuffles don't drop solo. When solo
+// engages we snapshot every band's enabled state so exiting solo restores
+// exactly the prior state rather than blindly enabling all bands.
+let soloedIndex: number | null = null;
+let prevSoloEnabled: boolean[] | null = null;
+
+// Drag-start state captured on mousedown. Used by shift-drag (mutate Q
+// instead of freq/gain), the click-vs-drag discriminator, and the
+// drag-off-canvas delete check on mouseup.
+let dragStartX = 0;
+let dragStartY = 0;
+let dragStartQ = 1;
+let dragMoved = false;
+// Modifier keys captured at mousedown (for click-time decisions) and
+// refreshed on each mousemove via the event's live `altKey` / `shiftKey`
+// (so a user can press/release modifiers mid-drag to switch modes).
+let dragAltAtStart = false;
+let dragShiftAtStart = false;
 
 // DOM refs
 let canvas: HTMLCanvasElement | null = null;
@@ -416,6 +443,7 @@ function drawHandles(
 	// Bypassed: band circles still draw (so drag-editing remains possible)
 	// but de-emphasized at 0.45 alpha so the canvas reads as neutral.
 	const bypassed = !isEqEnabled();
+	const hasPresetSnapshot = getLoadedPresetSnapshot() !== null;
 	c.save();
 	if (bypassed) c.globalAlpha = 0.45;
 
@@ -451,6 +479,29 @@ function drawHandles(
 		c.textAlign = "center";
 		c.textBaseline = "middle";
 		c.fillText(String(sortedPos + 1), x, y + 0.5);
+
+		// Feature 3 — soloed band gets a thin accent ring outside the
+		// standard halo so it reads as "the one that matters".
+		if (band.index === soloedIndex) {
+			c.beginPath();
+			c.arc(x, y, r + 5, 0, 2 * Math.PI);
+			c.strokeStyle = accent;
+			c.lineWidth = 2;
+			c.stroke();
+		}
+
+		// Feature 4 — "changed vs preset" indicator. Dot sits just inside
+		// the halo ring (offset r*0.6) so it stays visible for bands at
+		// canvas extremes. Skipped entirely when no preset is loaded.
+		if (hasPresetSnapshot && isBandChangedVsPreset(band.index)) {
+			c.save();
+			c.globalAlpha = 0.7;
+			c.fillStyle = accent;
+			c.beginPath();
+			c.arc(x + r * 0.6, y - r * 0.6, 3, 0, 2 * Math.PI);
+			c.fill();
+			c.restore();
+		}
 	});
 	c.textBaseline = "alphabetic";
 	c.restore();
@@ -619,6 +670,11 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 			if (cellRefs[sortedPos]) {
 				cellRefs[sortedPos].typeLabel.textContent =
 					BAND_TYPE_LABELS[sel.value] ?? "Peaking";
+				// Live-swap the gain cell between an editable input and the
+				// muted em-dash placeholder when toggling to/from a gainless
+				// type. Row layout stays stable because we flip the input's
+				// visibility in place rather than re-rendering the DOM.
+				paintGainCell(cellRefs[sortedPos].gain, sel.value, band.gain);
 			}
 			draw();
 		});
@@ -626,11 +682,17 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 		cellRefs[sortedPos].type = sel;
 	});
 
-	// GAIN row
+	// GAIN row — gainless types (HP/LP/NO/BP) render a muted em-dash via
+	// paintGainCell while keeping the input element so the DOM grid is
+	// stable. The input stays disabled for those types so the user can
+	// see the row layout without accidentally editing.
 	grid.appendChild(rowLabel("Gain"));
 	view.forEach(({ band, originalIndex }, sortedPos) => {
 		const inp = numericInput(formatGain(band.gain), -20, 20, 0.1);
 		inp.addEventListener("input", () => {
+			// Gainless types ignore the input (it's disabled anyway, but
+			// a programmatic .value change shouldn't bleed into state).
+			if (!typeHasGain(inp.dataset.bandType ?? "PK")) return;
 			const v = Number(inp.value);
 			if (Number.isFinite(v)) {
 				onUpdateCallback?.(originalIndex, "gain", v);
@@ -639,6 +701,7 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 		});
 		grid.appendChild(inp);
 		cellRefs[sortedPos].gain = inp;
+		paintGainCell(inp, band.type, band.gain);
 	});
 
 	// FREQ row — edits flow into state on `input`, but we only re-sort the
@@ -692,6 +755,23 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 	table.appendChild(grid);
 }
 
+// Paint the gain input for a band. Gainless types render a muted em-dash
+// and disable the input; gainful types restore the numeric value. Stored
+// `dataset.bandType` is read by the input handler to skip writes while a
+// gainless type is active.
+function paintGainCell(inp: HTMLInputElement, type: string, gain: number) {
+	inp.dataset.bandType = type;
+	if (typeHasGain(type)) {
+		inp.disabled = false;
+		inp.classList.remove("gain-cell-dash");
+		inp.value = formatGain(gain);
+	} else {
+		inp.disabled = true;
+		inp.classList.add("gain-cell-dash");
+		inp.value = "—";
+	}
+}
+
 // Display helpers — strip trailing zeros so "12.0" reads as "12".
 function formatGain(v: number): string {
 	return parseFloat(v.toFixed(1)).toString();
@@ -738,7 +818,7 @@ function syncBandTable(bands: Band[]) {
 		if (focused !== refs.type && refs.type.value !== b.type) {
 			refs.type.value = b.type;
 		}
-		if (focused !== refs.gain) refs.gain.value = formatGain(b.gain);
+		if (focused !== refs.gain) paintGainCell(refs.gain, b.type, b.gain);
 		if (focused !== refs.freq) refs.freq.value = String(Math.round(b.freq));
 		if (focused !== refs.q) refs.q.value = formatQ(b.q);
 		refs.enable.checked = b.enabled;
@@ -766,6 +846,10 @@ export interface RenderPEQOptions {
 	onAddBand?: () => void;
 	onRemoveBand?: () => void;
 	getBandCountCap?: () => { min: number; max: number };
+	// Feature 3 — drag-off-canvas delete. Called with the array position
+	// (not hardware slot) of the band that was dragged past the canvas
+	// bounds. The caller handles snapshot + removal + rerender.
+	onDeleteBand?: (arrayIdx: number) => void;
 }
 
 export function renderPEQ(
@@ -782,6 +866,7 @@ export function renderPEQ(
 	inactiveBands = options.inactiveBands ?? null;
 	onAddBandCallback = options.onAddBand ?? null;
 	onRemoveBandCallback = options.onRemoveBand ?? null;
+	onDeleteBandCallback = options.onDeleteBand ?? null;
 	getBandCountCapCallback = options.getBandCountCap ?? null;
 
 	if (isFirstRender) {
@@ -882,6 +967,41 @@ function syncBandCountControls() {
 	bandCountControls.removeBtn.disabled = n <= cap.min;
 }
 
+// Pixel-delta threshold below which a mouseup is treated as a click (not
+// a drag). Chosen to feel forgiving for touchpads without accidentally
+// eating a short-but-real drag.
+const CLICK_DRAG_THRESHOLD_PX = 3;
+
+// Feature 3 — engage solo on the given hardware slot. Snapshots the
+// enabled state first so exiting restores exactly what was there. All
+// mutations route through the update callback so history + persistence
+// capture the toggle, matching the plan's "no direct eqState writes".
+function enterSolo(hardwareIndex: number) {
+	prevSoloEnabled = localBands.map((b) => b.enabled);
+	soloedIndex = hardwareIndex;
+	localBands.forEach((b, arrayIdx) => {
+		const shouldBeEnabled = b.index === hardwareIndex;
+		if (b.enabled !== shouldBeEnabled) {
+			handleUpdate(arrayIdx, "enabled", shouldBeEnabled);
+		}
+	});
+}
+
+// Restore the enabled-state snapshot taken when solo engaged. Safe to call
+// when solo isn't active (no-op). After restore, clears the snapshot.
+function exitSolo() {
+	if (prevSoloEnabled) {
+		localBands.forEach((b, arrayIdx) => {
+			const target = prevSoloEnabled?.[arrayIdx] ?? b.enabled;
+			if (b.enabled !== target) {
+				handleUpdate(arrayIdx, "enabled", target);
+			}
+		});
+	}
+	soloedIndex = null;
+	prevSoloEnabled = null;
+}
+
 function wireCanvasInteraction(el: HTMLCanvasElement) {
 	el.addEventListener("mousedown", (e) => {
 		const rect = el.getBoundingClientRect();
@@ -911,12 +1031,66 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 		if (closestArrayIdx !== -1) {
 			draggingIndex = closestArrayIdx;
 			selectBand(localBands[closestArrayIdx].index);
+			// Capture drag start state for click-vs-drag + shift-drag Q work.
+			dragStartX = e.clientX;
+			dragStartY = e.clientY;
+			dragStartQ = localBands[closestArrayIdx].q;
+			dragMoved = false;
+			dragAltAtStart = e.altKey;
+			dragShiftAtStart = e.shiftKey;
 		}
+	});
+
+	// Double-click → snap gain to 0 (unless gainless type). Uses the native
+	// dblclick event so the existing drag state machine stays out of its way.
+	el.addEventListener("dblclick", (e) => {
+		const rect = el.getBoundingClientRect();
+		const scaleX = (el as any).logicalWidth / rect.width;
+		const scaleY = (el as any).logicalHeight / rect.height;
+		const x = (e.clientX - rect.left) * scaleX;
+		const y = (e.clientY - rect.top) * scaleY;
+		const w = (el as any).logicalWidth;
+		const h = (el as any).logicalHeight;
+		let arrayIdx = -1;
+		let minDst = 1000;
+		localBands.forEach((band, idx) => {
+			const bx = freqToX(band.freq, w);
+			const by = gainToY(band.gain, h);
+			const dist = Math.sqrt((x - bx) ** 2 + (y - by) ** 2);
+			if (dist < 22 && dist < minDst) {
+				minDst = dist;
+				arrayIdx = idx;
+			}
+		});
+		if (arrayIdx === -1) return;
+		const band = localBands[arrayIdx];
+		if (!typeHasGain(band.type)) return;
+		handleUpdate(arrayIdx, "gain", 0);
 	});
 
 	window.addEventListener("mousemove", (e) => {
 		if (draggingIndex === null || !canvas) return;
 		const rect = canvas.getBoundingClientRect();
+
+		// Once the pointer has moved more than a few pixels we commit to
+		// "this is a drag" and suppress the click handler on mouseup.
+		const dx = e.clientX - dragStartX;
+		const dy = e.clientY - dragStartY;
+		if (!dragMoved && Math.hypot(dx, dy) > CLICK_DRAG_THRESHOLD_PX) {
+			dragMoved = true;
+		}
+		if (!dragMoved) return;
+
+		// Shift-drag → mutate Q instead of freq/gain. Sensitivity is
+		// +/- 0.005 per pixel of vertical motion from the drag-start Y.
+		if (e.shiftKey) {
+			const delta = (dragStartY - e.clientY) * 0.005;
+			const q = Math.max(0.1, Math.min(10, dragStartQ + delta));
+			const rounded = Math.round(q * 100) / 100;
+			handleUpdate(draggingIndex, "q", rounded);
+			return;
+		}
+
 		const relX = e.clientX - rect.left;
 		const relY = e.clientY - rect.top;
 		const clampedX = Math.max(
@@ -928,18 +1102,84 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 			Math.min(rect.height - CONFIG.padding, relY),
 		);
 		const freq = Math.round(xToFreq(clampedX, rect.width));
-		const gain = Math.round(yToGain(clampedY, rect.height) * 10) / 10;
+		// Alt-drag reduces the gain quantization step from 0.1 to 0.02 per
+		// pixel so users can dial in small boosts without a fine-control
+		// input. Freq stays at 1 Hz per pixel in both modes.
+		const gainRaw = yToGain(clampedY, rect.height);
+		const gain = e.altKey
+			? Math.round(gainRaw * 50) / 50
+			: Math.round(gainRaw * 10) / 10;
 		handleUpdate(draggingIndex, "freq", freq);
-		handleUpdate(draggingIndex, "gain", gain);
+		// Gainless types: freq-only drags. Don't write a gain that's
+		// ignored by computeBiquad — stays cleaner in history.
+		const band = localBands[draggingIndex];
+		if (band && typeHasGain(band.type)) {
+			handleUpdate(draggingIndex, "gain", gain);
+		}
 	});
 
-	window.addEventListener("mouseup", () => {
+	window.addEventListener("mouseup", (e) => {
 		if (draggingIndex === null) return;
+		const finishedIdx = draggingIndex;
 		draggingIndex = null;
-		// Drag is over — now let the sort-fingerprint check run and rebuild
-		// the table if the dragged band crossed a neighbour. syncBandTable
-		// alone wouldn't catch this since we gate rebuild by `draggingIndex`
-		// during the drag itself.
+
+		// If the pointer never moved past threshold, this was a click —
+		// dispatch modifier-click actions. Regular clicks fall through to
+		// no extra action (selection already happened on mousedown).
+		if (!dragMoved && canvas) {
+			const band = localBands[finishedIdx];
+			if (band) {
+				if (dragAltAtStart) {
+					// Alt-click → toggle enabled.
+					handleUpdate(finishedIdx, "enabled", !band.enabled);
+				} else if (dragShiftAtStart) {
+					// Shift-click → solo / un-solo. Clicking the already-
+					// soloed band exits; clicking another switches target.
+					if (soloedIndex === band.index) {
+						exitSolo();
+					} else {
+						// If solo was active on a different band, restore the
+						// snapshot first so `enterSolo` records the *original*
+						// enabled state (not the post-mute one).
+						if (soloedIndex !== null) exitSolo();
+						enterSolo(band.index);
+					}
+				}
+			}
+			if (bandTable) {
+				const currentFingerprint = sortFingerprint(sortedView(localBands));
+				if (currentFingerprint !== lastSortFingerprint) {
+					buildBandTable(bandTable, localBands);
+				}
+			}
+			draw();
+			return;
+		}
+
+		// Drag-off-canvas delete: if the final pointer position is outside
+		// the canvas with a 20px margin of grace, fire the delete callback.
+		// Reset solo if the deleted band was the soloed one.
+		if (canvas && onDeleteBandCallback) {
+			const rect = canvas.getBoundingClientRect();
+			const margin = 20;
+			const outside =
+				e.clientX < rect.left - margin ||
+				e.clientX > rect.right + margin ||
+				e.clientY < rect.top - margin ||
+				e.clientY > rect.bottom + margin;
+			if (outside) {
+				const band = localBands[finishedIdx];
+				if (band && soloedIndex === band.index) {
+					soloedIndex = null;
+					prevSoloEnabled = null;
+				}
+				onDeleteBandCallback(finishedIdx);
+				return;
+			}
+		}
+
+		// Drag ended inside the canvas — run the fingerprint rebuild as
+		// before (the dragged band may have crossed a neighbour).
 		if (bandTable) {
 			const currentFingerprint = sortFingerprint(sortedView(localBands));
 			if (currentFingerprint !== lastSortFingerprint) {

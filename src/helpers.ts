@@ -1,4 +1,6 @@
 import { setDeviceGlobalGain } from "./dsp.ts";
+import { typeHasGain } from "./dsp/biquad.ts";
+import type { Band } from "./main.ts";
 
 /**
  * Console element
@@ -149,3 +151,24 @@ export function toast(msg: string, ms = 2500) {
  * @param ms | Number of milliseconds to delay
  */
 export const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Feature 5 — clipping headroom math. Sums positive band boosts across
+ * enabled gainful bands and compares against the pre-amp's available
+ * attenuation (`-globalGain`, since globalGain is negative-attenuation).
+ * A negative return value means the pre-amp doesn't have enough headroom
+ * to contain the summed boosts — a digital-clipping risk.
+ *
+ * Gainless types (HP/LP/NO/BP) never contribute boost: they don't expose
+ * a user gain parameter, and `computeBiquad` doesn't read `band.gain`
+ * for them. Excluding them keeps the math matched to what the DSP hears.
+ */
+export function computeClippingHeadroom(bands: Band[], globalGain: number): number {
+	let sum = 0;
+	for (const b of bands) {
+		if (!b.enabled) continue;
+		if (!typeHasGain(b.type)) continue;
+		if (b.gain > 0) sum += b.gain;
+	}
+	return -globalGain - sum;
+}
