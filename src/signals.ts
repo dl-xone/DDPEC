@@ -7,7 +7,10 @@ let activeSource:
 	| { stop: () => void; type: "pink" | "white" | "sweep" }
 	| null = null;
 
-function getContext(): AudioContext {
+// Exported so other audio surfaces (spectrum.ts, abx.ts) reuse the same
+// AudioContext. Browsers allow only a few contexts before warning, and
+// sharing one context lets test signals + spectrum analyser coexist.
+export function getContext(): AudioContext {
 	if (!ctx || ctx.state === "closed") {
 		const AC =
 			window.AudioContext ||

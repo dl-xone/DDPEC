@@ -16,6 +16,15 @@ export type ExportFormat =
 	| "wavelet"
 	| "camilla"
 	| "peace";
+export type SpectrumSource = "off" | "tab" | "system" | "mic" | "virtual" | "file";
+
+// Pure shape — full result of the most recent ABX run. Stored so the
+// "Last: 7/10 (p=0.17)" subtitle can render without re-running the test.
+export interface AbxScore {
+	rounds: number;
+	correct: number;
+	pValue: number;
+}
 
 export interface SessionState {
 	activeSlot: SlotName;
@@ -43,6 +52,12 @@ export interface SessionState {
 	// Feature 9 — last-used export format. Clicking the main export button
 	// re-runs whatever format the user picked most recently.
 	exportFormat: ExportFormat;
+	// Feature A — last-selected live-spectrum source. On cold start we
+	// remember the choice but never auto-start (capture needs a user gesture);
+	// the button just shows the "Resume" affordance.
+	spectrumSource: SpectrumSource;
+	// Feature D — score of the most recent ABX run. Null until first run.
+	lastAbxScore: AbxScore | null;
 }
 
 const STORAGE_KEY = "ddpec.session";
@@ -55,6 +70,14 @@ const VALID_EXPORT_FORMATS: readonly ExportFormat[] = [
 	"wavelet",
 	"camilla",
 	"peace",
+];
+const VALID_SPECTRUM_SOURCES: readonly SpectrumSource[] = [
+	"off",
+	"tab",
+	"system",
+	"mic",
+	"virtual",
+	"file",
 ];
 
 const DEFAULTS: SessionState = {
@@ -70,6 +93,8 @@ const DEFAULTS: SessionState = {
 	showDelta: false,
 	showPhase: false,
 	exportFormat: "json",
+	spectrumSource: "off",
+	lastAbxScore: null,
 };
 
 let current: SessionState = { ...DEFAULTS };
@@ -105,6 +130,30 @@ function sanitize(raw: unknown): Partial<SessionState> {
 		(VALID_EXPORT_FORMATS as readonly string[]).includes(o.exportFormat)
 	)
 		out.exportFormat = o.exportFormat as ExportFormat;
+	if (
+		typeof o.spectrumSource === "string" &&
+		(VALID_SPECTRUM_SOURCES as readonly string[]).includes(o.spectrumSource)
+	)
+		out.spectrumSource = o.spectrumSource as SpectrumSource;
+	if (o.lastAbxScore && typeof o.lastAbxScore === "object") {
+		const s = o.lastAbxScore as Record<string, unknown>;
+		if (
+			typeof s.rounds === "number" &&
+			typeof s.correct === "number" &&
+			typeof s.pValue === "number" &&
+			Number.isFinite(s.rounds) &&
+			Number.isFinite(s.correct) &&
+			Number.isFinite(s.pValue)
+		) {
+			out.lastAbxScore = {
+				rounds: s.rounds,
+				correct: s.correct,
+				pValue: s.pValue,
+			};
+		}
+	} else if (o.lastAbxScore === null) {
+		out.lastAbxScore = null;
+	}
 	return out;
 }
 

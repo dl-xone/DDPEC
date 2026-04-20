@@ -137,6 +137,9 @@ export {
 // pulling in commandPalette.ts directly.
 export { openPalette } from "./commandPalette.ts";
 
+import { morphToBands } from "./morph.ts";
+import { initShortcutOverlay, registerShortcut } from "./shortcutOverlay.ts";
+
 export function initState() {
 	renderUI(getEqState());
 	resizeCanvas();
@@ -243,6 +246,20 @@ export function initState() {
 	wireViewToggles();
 	wireExportMenu();
 	registerDefaultCommands();
+
+	// Feature B — Alt-hold shortcut overlay. Listeners attach once; chip
+	// elements inject lazily on first Alt hold so dynamically-rendered
+	// targets (e.g. preset bar) are present by then.
+	initShortcutOverlay();
+	registerShortcut("#btnUndo", "⌘Z");
+	registerShortcut("#btnRedo", "⇧⌘Z");
+	registerShortcut("#btnSlotSwap", "Alt+S");
+	registerShortcut("#btnDisableEq", "Space");
+	registerShortcut("#eqEnabledSwitch", "Space");
+
+	// Feature D — ABX harness button + last-score subtitle.
+	wireAbxButton();
+	paintAbxSubtitle();
 }
 
 // Target-curve picker. Distinct from the measurement loader so the two
@@ -712,26 +729,31 @@ export async function applyPresetFromSidebar(id: string) {
 		if (!ok) return;
 	}
 	snapshot();
-	setEqState(applyPreset(preset, maxFilters, defaultFreqs));
-	if (typeof preset.preamp === "number" && !cfg?.autoGlobalGain) {
-		setGlobalGain(preset.preamp);
-	}
-	// Feature 4 — record the preset's values as the "changed vs preset"
-	// baseline so subsequent edits decorate their bands with the dot.
-	setLoadedPresetSnapshot(getEqState());
-	saveSession({ selectedPresetId: preset.id });
-	renderPresetSidebar(
-		(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
-			"",
-	);
-	renderUI(getEqState());
-	updateHistoryButtons();
-	if (cfg) persistProfile(cfg.key);
-	log(
-		cfg
-			? `Loaded preset: ${preset.name}. Sync to apply.`
-			: `Loaded preset: ${preset.name}. Connect a device to apply.`,
-	);
+	const targetBands = applyPreset(preset, maxFilters, defaultFreqs);
+	morphToBands(targetBands, {
+		onStep: () => renderUI(getEqState()),
+		onDone: () => {
+			if (typeof preset.preamp === "number" && !cfg?.autoGlobalGain) {
+				setGlobalGain(preset.preamp);
+			}
+			// Feature 4 — record the preset's values as the "changed vs preset"
+			// baseline so subsequent edits decorate their bands with the dot.
+			setLoadedPresetSnapshot(getEqState());
+			saveSession({ selectedPresetId: preset.id });
+			renderPresetSidebar(
+				(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
+					"",
+			);
+			renderUI(getEqState());
+			updateHistoryButtons();
+			if (cfg) persistProfile(cfg.key);
+			log(
+				cfg
+					? `Loaded preset: ${preset.name}. Sync to apply.`
+					: `Loaded preset: ${preset.name}. Connect a device to apply.`,
+			);
+		},
+	});
 }
 
 // Switch which in-memory slot is active. The UI re-renders to reflect the
@@ -1777,13 +1799,22 @@ export async function resetToDefaults() {
 	log("Resetting to factory defaults...");
 
 	snapshot();
-	setEqState(defaultEqState(getActiveConfig()));
-	setGlobalGain(0);
-	// Feature 4 — no preset is the baseline after a factory reset, so the
-	// "changed vs preset" dots stay suppressed until the user loads one.
-	setLoadedPresetSnapshot(null);
-	renderUI(getEqState());
-	updateHistoryButtons();
+	const defaults = defaultEqState(getActiveConfig());
+	await new Promise<void>((resolve) => {
+		morphToBands(defaults, {
+			onStep: () => renderUI(getEqState()),
+			onDone: () => {
+				setGlobalGain(0);
+				// Feature 4 — no preset is the baseline after a factory reset, so
+				// the "changed vs preset" dots stay suppressed until the user
+				// loads one.
+				setLoadedPresetSnapshot(null);
+				renderUI(getEqState());
+				updateHistoryButtons();
+				resolve();
+			},
+		});
+	});
 
 	const cfg = getActiveConfig();
 	if (cfg) persistProfile(cfg.key);
@@ -2051,6 +2082,21 @@ function syncViewToggleButtons() {
 	setPressed("btnToggleAbOverlay", s.abOverlay !== "hidden");
 	setPressed("btnToggleDelta", !!s.showDelta);
 	setPressed("btnTogglePhase", !!s.showPhase);
+	// Spectrum button paints from live state (not session): we only show
+	// the "active" indicator if the analyser is actually running. On cold
+	// start spectrumSource may be e.g. "mic" but we never auto-start
+	// (capture needs a user gesture), so the button remains in resume
+	// mode until the user clicks.
+	const spectrumBtn = document.getElementById("btnToggleSpectrum");
+	if (spectrumBtn) {
+		const last = s.spectrumSource;
+		spectrumBtn.setAttribute(
+			"title",
+			last === "off"
+				? "Live audio spectrum"
+				: `Live audio spectrum (last: ${last}) — click to start`,
+		);
+	}
 	// Feature 10 — AutoEQ button only lights up when both a target AND a
 	// measurement are loaded (needed to compute the error vector).
 	const autoEqBtn = document.getElementById("btnAutoEq") as HTMLButtonElement | null;
@@ -2086,6 +2132,322 @@ function wireViewToggles() {
 	document
 		.getElementById("btnTogglePhase")
 		?.addEventListener("click", () => togglePhaseView());
+	document
+		.getElementById("btnToggleSpectrum")
+		?.addEventListener("click", (e) => {
+			const anchor = e.currentTarget as HTMLElement;
+			handleSpectrumToggleClick(anchor);
+		});
+}
+
+// Feature A — spectrum toggle. Active → stop. Inactive → open a popover
+// listing sources. The actual capture work lives in spectrum.ts; this
+// handler is purely UI orchestration + session persistence.
+async function handleSpectrumToggleClick(anchor: HTMLElement) {
+	const { isSpectrumActive, startSpectrum, stopSpectrum, listAudioInputDevices } =
+		await import("./spectrum.ts");
+	const { startSpectrumLoop, stopSpectrumLoop } = await import("./peq.ts");
+
+	if (isSpectrumActive()) {
+		stopSpectrum();
+		stopSpectrumLoop();
+		setSpectrumButtonActive(false);
+		saveSession({ spectrumSource: "off" });
+		return;
+	}
+
+	openSpectrumPicker(anchor, async (choice, file) => {
+		try {
+			if (choice === "virtual") {
+				const devices = await listAudioInputDevices();
+				if (devices.length === 0) {
+					toast("No audio input devices found.");
+					return;
+				}
+				const picked = await openDevicePicker(anchor, devices);
+				if (!picked) return;
+				await startSpectrum("virtual", { deviceId: picked });
+			} else if (choice === "file") {
+				if (!file) return;
+				await startSpectrum("file", { file });
+			} else {
+				await startSpectrum(choice);
+			}
+			startSpectrumLoop();
+			setSpectrumButtonActive(true);
+			saveSession({ spectrumSource: choice });
+			log(`Spectrum source: ${choice}`);
+		} catch (err) {
+			toast("Audio source not available.");
+			log(`Spectrum start failed: ${(err as Error).message}`);
+		}
+	});
+}
+
+function setSpectrumButtonActive(active: boolean) {
+	const btn = document.getElementById("btnToggleSpectrum");
+	if (!btn) return;
+	btn.classList.toggle("toggle-on", active);
+	btn.classList.toggle("spectrum-active", active);
+	btn.setAttribute("aria-pressed", active ? "true" : "false");
+}
+
+interface SpectrumPickerOption {
+	id: "tab" | "system" | "mic" | "virtual" | "file";
+	label: string;
+	hint: string;
+}
+
+function openSpectrumPicker(
+	anchor: HTMLElement,
+	onPick: (
+		choice: "tab" | "system" | "mic" | "virtual" | "file",
+		file?: File,
+	) => void,
+) {
+	const existing = document.getElementById("spectrumPicker");
+	if (existing) {
+		existing.remove();
+		return;
+	}
+	const options: SpectrumPickerOption[] = [
+		{ id: "tab", label: "Tab audio", hint: "Capture a specific tab (all platforms)" },
+		{ id: "system", label: "System audio", hint: "Chrome / Windows only" },
+		{ id: "mic", label: "Microphone", hint: "Ambient room sound" },
+		{
+			id: "virtual",
+			label: "Virtual device",
+			hint: "BlackHole / VB-Cable (required on macOS)",
+		},
+		{ id: "file", label: "File…", hint: "Drop or pick an audio file" },
+	];
+
+	const menu = document.createElement("div");
+	menu.id = "spectrumPicker";
+	menu.className = "export-menu spectrum-picker";
+	menu.setAttribute("role", "menu");
+	const rect = anchor.getBoundingClientRect();
+	menu.style.position = "fixed";
+	menu.style.top = `${rect.bottom + 4}px`;
+	menu.style.left = `${rect.left}px`;
+	menu.style.zIndex = "1000";
+
+	for (const opt of options) {
+		const item = document.createElement("button");
+		item.type = "button";
+		item.className = "export-menu-item spectrum-picker-item";
+		const title = document.createElement("div");
+		title.className = "spectrum-picker-title";
+		title.textContent = opt.label;
+		const hint = document.createElement("div");
+		hint.className = "spectrum-picker-hint";
+		hint.textContent = opt.hint;
+		item.append(title, hint);
+		item.addEventListener("click", () => {
+			menu.remove();
+			if (opt.id === "file") {
+				const input = document.createElement("input");
+				input.type = "file";
+				input.accept = "audio/*";
+				input.addEventListener("change", () => {
+					const file = input.files?.[0];
+					if (file) onPick("file", file);
+				});
+				input.click();
+			} else {
+				onPick(opt.id);
+			}
+		});
+		menu.appendChild(item);
+	}
+	document.body.appendChild(menu);
+
+	const closeOnOutside = (ev: MouseEvent) => {
+		if (!menu.contains(ev.target as Node) && ev.target !== anchor) {
+			menu.remove();
+			document.removeEventListener("mousedown", closeOnOutside);
+		}
+	};
+	setTimeout(() => document.addEventListener("mousedown", closeOnOutside), 0);
+}
+
+function openDevicePicker(
+	anchor: HTMLElement,
+	devices: MediaDeviceInfo[],
+): Promise<string | null> {
+	return new Promise((resolve) => {
+		const existing = document.getElementById("spectrumDevicePicker");
+		if (existing) existing.remove();
+		const menu = document.createElement("div");
+		menu.id = "spectrumDevicePicker";
+		menu.className = "export-menu spectrum-picker";
+		const rect = anchor.getBoundingClientRect();
+		menu.style.position = "fixed";
+		menu.style.top = `${rect.bottom + 4}px`;
+		menu.style.left = `${rect.left}px`;
+		menu.style.zIndex = "1000";
+		let resolved = false;
+		for (const d of devices) {
+			const item = document.createElement("button");
+			item.type = "button";
+			item.className = "export-menu-item";
+			item.textContent = d.label || `Input ${d.deviceId.slice(0, 6)}`;
+			item.addEventListener("click", () => {
+				resolved = true;
+				menu.remove();
+				resolve(d.deviceId);
+			});
+			menu.appendChild(item);
+		}
+		document.body.appendChild(menu);
+		const closeOnOutside = (ev: MouseEvent) => {
+			if (!menu.contains(ev.target as Node)) {
+				menu.remove();
+				document.removeEventListener("mousedown", closeOnOutside);
+				if (!resolved) resolve(null);
+			}
+		};
+		setTimeout(() => document.addEventListener("mousedown", closeOnOutside), 0);
+	});
+}
+
+// Feature D — ABX button wiring. Click → opens modal. After each run
+// the score persists into session.lastAbxScore and the subtitle updates.
+function wireAbxButton() {
+	document
+		.getElementById("btnAbx")
+		?.addEventListener("click", () => openAbxModal());
+}
+
+function paintAbxSubtitle() {
+	const el = document.getElementById("btnAbxScore");
+	if (!el) return;
+	const score = getSession().lastAbxScore;
+	if (!score) {
+		el.textContent = "";
+		return;
+	}
+	el.textContent = `${score.correct}/${score.rounds} (p=${score.pValue.toFixed(2)})`;
+}
+
+async function openAbxModal() {
+	const abx = await import("./abx.ts");
+	const slotA = getEqState();
+	const slotB = getInactiveEq();
+	if (slotA.length === 0 || slotB.length === 0) {
+		toast("Both slots need bands to ABX.");
+		return;
+	}
+
+	const totalRounds = 10;
+	let roundIdx = 0;
+	let correct = 0;
+	let currentRound: ReturnType<typeof abx.createRound> | null = null;
+	let answered = false;
+
+	const content = document.createElement("div");
+	content.className = "abx-modal";
+
+	const progress = document.createElement("div");
+	progress.className = "abx-progress";
+	const status = document.createElement("div");
+	status.className = "abx-result";
+	status.textContent = "Click Start to begin a 10-round blind comparison of slots A and B.";
+
+	const controls = document.createElement("div");
+	controls.className = "abx-controls";
+
+	const btnStart = makeBtn("Start");
+	const btnPlayX = makeBtn("Play X");
+	const btnA = makeBtn("A");
+	const btnB = makeBtn("B");
+	const btnNext = makeBtn("Next");
+	[btnPlayX, btnA, btnB, btnNext].forEach((b) => (b.disabled = true));
+	controls.append(btnStart, btnPlayX, btnA, btnB, btnNext);
+
+	content.append(progress, status, controls);
+
+	const dialog = customModal("ABX blind test", content, { cancelLabel: "Close" });
+	dialog.addEventListener("close", () => abx.stopAbxPlayback());
+
+	function makeBtn(label: string): HTMLButtonElement {
+		const b = document.createElement("button");
+		b.type = "button";
+		b.className = "btn-outline";
+		b.textContent = label;
+		return b;
+	}
+
+	function refreshProgress() {
+		progress.textContent = `Round ${Math.min(roundIdx + 1, totalRounds)} of ${totalRounds} · Correct: ${correct}`;
+	}
+
+	function startNewRound() {
+		if (roundIdx >= totalRounds) {
+			finish();
+			return;
+		}
+		answered = false;
+		currentRound = abx.createRound(slotA, slotB, "pink");
+		// Auto-play X so the user immediately hears the round's stimulus.
+		void currentRound.playX();
+		btnPlayX.disabled = false;
+		btnA.disabled = false;
+		btnB.disabled = false;
+		btnNext.disabled = true;
+		btnStart.disabled = true;
+		status.textContent = "Listening to X. Pick A or B.";
+		refreshProgress();
+	}
+
+	function answer(choice: "A" | "B") {
+		if (!currentRound || answered) return;
+		answered = true;
+		const isCorrect = currentRound.x === choice;
+		if (isCorrect) correct++;
+		status.textContent = `${isCorrect ? "Correct" : "Wrong"} — X was ${currentRound.x}.`;
+		btnA.disabled = true;
+		btnB.disabled = true;
+		btnNext.disabled = false;
+		refreshProgress();
+	}
+
+	function finish() {
+		abx.stopAbxPlayback();
+		const result = abx.computeAbxResult(correct, totalRounds);
+		const significant = result.pValue < 0.05;
+		const interp = significant
+			? `Significant difference detected (p < 0.05).`
+			: `No reliable difference (p = ${result.pValue.toFixed(3)}).`;
+		status.innerHTML = `<div>Final: <strong>${result.correct} / ${result.rounds}</strong></div><div class="abx-significance">${interp}</div>`;
+		btnStart.textContent = "Run again";
+		btnStart.disabled = false;
+		[btnPlayX, btnA, btnB, btnNext].forEach((b) => (b.disabled = true));
+		saveSession({ lastAbxScore: result });
+		paintAbxSubtitle();
+	}
+
+	btnStart.addEventListener("click", () => {
+		roundIdx = 0;
+		correct = 0;
+		startNewRound();
+	});
+	btnPlayX.addEventListener("click", () => currentRound?.playX());
+	btnA.addEventListener("click", () => {
+		void currentRound?.playA();
+		// Allow A/B preview even after answer — only the first answer counts.
+		if (!answered) answer("A");
+	});
+	btnB.addEventListener("click", () => {
+		void currentRound?.playB();
+		if (!answered) answer("B");
+	});
+	btnNext.addEventListener("click", () => {
+		roundIdx++;
+		startNewRound();
+	});
+
+	refreshProgress();
 }
 
 // Feature 9 — export format dispatcher. Click main button → download with
@@ -2313,9 +2675,16 @@ export async function handleAutoEq() {
 	const after = autofit.fitMse(target, measurement, newBands);
 
 	snapshot();
-	setEqState(newBands);
-	renderUI(getEqState());
-	updateHistoryButtons();
+	await new Promise<void>((resolve) => {
+		morphToBands(newBands, {
+			onStep: () => renderUI(getEqState()),
+			onDone: () => {
+				renderUI(getEqState());
+				updateHistoryButtons();
+				resolve();
+			},
+		});
+	});
 	const cfg = getActiveConfig();
 	if (cfg) persistProfile(cfg.key);
 

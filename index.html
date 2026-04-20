@@ -56,6 +56,10 @@
     <button type="button" id="btnTogglePhase" class="btn-ghost-icon" title="Toggle phase response" aria-label="Toggle phase response" aria-pressed="false">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12c3-6 7-6 9 0s6 6 9 0"/></svg>
     </button>
+    <button type="button" id="btnToggleSpectrum" class="btn-ghost-icon" title="Live audio spectrum" aria-label="Toggle live spectrum" aria-pressed="false">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="4" y1="18" x2="4" y2="14"/><line x1="8" y1="18" x2="8" y2="6"/><line x1="12" y1="18" x2="12" y2="10"/><line x1="16" y1="18" x2="16" y2="4"/><line x1="20" y1="18" x2="20" y2="12"/></svg>
+      <span class="spectrum-pulse" aria-hidden="true"></span>
+    </button>
     <div id="presetTitle" class="flex items-center gap-2.5 text-sm font-semibold text-text-1">
       <span id="presetStar" class="text-[#e5b850]">★</span>
       <span id="presetName">Untitled</span>
@@ -88,6 +92,10 @@
     <button type="button" id="btnSlotA" class="ab-btn active" role="tab" aria-selected="true">A</button>
     <button type="button" id="btnSlotB" class="ab-btn" role="tab" aria-selected="false">B</button>
     <button type="button" id="btnSlotSwap" class="ab-btn swap" title="Swap A ↔ B (Alt+S)" aria-label="Swap A and B (Alt+S)">↔</button>
+    <button type="button" id="btnAbx" class="btn-outline" title="Run blind ABX comparison of slots A and B">
+      ABX
+      <span id="btnAbxScore" class="abx-subtitle"></span>
+    </button>
   </div>
   <div class="flex items-center gap-2">
     <span class="font-mono text-[9px] uppercase tracking-[0.2em] text-text-3">Slot</span>

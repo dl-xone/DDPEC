@@ -855,3 +855,122 @@ dialog.command-palette::backdrop {
 	font-size: 12px;
 	color: var(--color-text-3);
 }
+
+/* Feature A — live spectrum button. Pulsing accent dot overlays the
+   waveform glyph when active. Picker popover reuses .export-menu base. */
+#btnToggleSpectrum {
+	position: relative;
+}
+#btnToggleSpectrum .spectrum-pulse {
+	position: absolute;
+	top: 4px;
+	right: 4px;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--color-accent);
+	opacity: 0;
+	pointer-events: none;
+}
+#btnToggleSpectrum.spectrum-active .spectrum-pulse {
+	opacity: 1;
+	animation: spectrum-pulse 1.4s ease-in-out infinite;
+}
+@keyframes spectrum-pulse {
+	0%, 100% { opacity: 0.4; transform: scale(1); }
+	50% { opacity: 1; transform: scale(1.4); }
+}
+@media (prefers-reduced-motion: reduce) {
+	#btnToggleSpectrum.spectrum-active .spectrum-pulse {
+		animation: none;
+		opacity: 1;
+	}
+}
+.spectrum-picker {
+	min-width: 240px;
+}
+.spectrum-picker-item {
+	flex-direction: column !important;
+	align-items: flex-start !important;
+	gap: 2px;
+	padding: 8px 12px !important;
+}
+.spectrum-picker-title {
+	font-size: 12px;
+	color: var(--color-text-1);
+}
+.spectrum-picker-hint {
+	font-size: 10px;
+	color: var(--color-text-3);
+}
+
+/* Feature B — Alt-hold keycap chips. Hidden by default; visible while
+   the user holds Alt. Pinned to the top-right corner of each registered
+   target. CSS-positioned so no per-frame JS needed. */
+.kbd-chip {
+	position: absolute;
+	top: -6px;
+	right: -8px;
+	padding: 1px 4px;
+	font-size: 9px;
+	font-family: var(--font-mono, ui-monospace, monospace);
+	background: var(--color-surface-3);
+	color: var(--color-text-2);
+	border-radius: 2px;
+	pointer-events: none;
+	opacity: 0;
+	transform: scale(0.85);
+	transition: opacity 180ms, transform 180ms;
+	z-index: 5;
+	white-space: nowrap;
+	line-height: 1.2;
+}
+body[data-alt-hold="1"] .kbd-chip {
+	opacity: 1;
+	transform: scale(1);
+}
+@media (prefers-reduced-motion: reduce) {
+	.kbd-chip {
+		transition: none;
+	}
+}
+
+/* Feature D — ABX harness UI. Modal layout + result interpretation chip. */
+.abx-modal {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	min-width: 320px;
+}
+.abx-controls {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+	justify-content: center;
+	flex-wrap: wrap;
+}
+.abx-controls button {
+	min-width: 60px;
+}
+.abx-progress {
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 11px;
+	color: var(--color-text-3);
+	text-align: center;
+}
+.abx-result {
+	font-family: var(--font-mono, ui-monospace, monospace);
+	text-align: center;
+	font-size: 14px;
+	color: var(--color-text-1);
+}
+.abx-significance {
+	font-size: 11px;
+	color: var(--color-text-2);
+	margin-top: 4px;
+}
+#btnAbx .abx-subtitle {
+	font-size: 10px;
+	color: var(--color-text-3);
+	margin-left: 6px;
+}

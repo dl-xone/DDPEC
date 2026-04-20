@@ -8,6 +8,7 @@ import {
 import type { Band } from "./main.ts";
 import { measurementDbAt, targetDbAt } from "./measurements.ts";
 import peqTemplate from "./peq.template.html?raw";
+import { isSpectrumActive, readSpectrum } from "./spectrum.ts";
 import { getLoadedPresetSnapshot, isBandChangedVsPreset, isEqEnabled } from "./state.ts";
 
 /**
@@ -652,6 +653,9 @@ function drawLegend(
 	if (showPhase) {
 		items.push({ label: "Phase (rad)", color: phaseCol, dashed: true });
 	}
+	if (isSpectrumActive()) {
+		items.push({ label: "Spectrum", color: accent });
+	}
 	if (items.length < 2) return;
 
 	c.save();
@@ -697,6 +701,9 @@ function draw() {
 
 	ctx.clearRect(0, 0, canvas.width, canvas.height);
 	drawGrid(ctx, width, height);
+	// Feature A — paint spectrum behind the curve so live audio energy
+	// reads as a backdrop, not as competing foreground line art.
+	drawSpectrum(ctx, width, height);
 	drawQLines(ctx, width, height);
 	drawCurve(ctx, width, height);
 	if (showDelta) drawDelta(ctx, width, height);
@@ -705,6 +712,14 @@ function draw() {
 		drawPhaseScale(ctx, width, height);
 	}
 	drawHandles(ctx, width, height);
+	// Feature E — snap-capture tick marks. Drawn after handles so they
+	// render on top of grid + curve, beneath nothing important.
+	if (capturedFreqSnap !== null) {
+		drawSnapTick(ctx, width, height, "x", capturedFreqSnap);
+	}
+	if (capturedGainSnap !== null) {
+		drawSnapTick(ctx, width, height, "y", capturedGainSnap);
+	}
 	drawLegend(ctx, width, height);
 }
 
@@ -1103,6 +1118,186 @@ function syncBandCountControls() {
 // eating a short-but-real drag.
 const CLICK_DRAG_THRESHOLD_PX = 3;
 
+// Feature E — magnetic snap. Round-value targets the user is most likely
+// to want to land on. Threshold is in canvas pixels measured along the
+// axis the user is dragging — keeps snap "feel" the same regardless of
+// where on the freq scale the band sits.
+const FREQ_SNAPS = [
+	20, 40, 60, 100, 250, 500, 1000, 2500, 5000, 10000, 20000,
+];
+const GAIN_SNAPS = [-12, -6, -3, 0, 3, 6, 12];
+const SNAP_THRESHOLD_PX = 6;
+
+// Module-scoped capture state — populated during drag, drawn as a tick
+// mark on the next render, cleared on mouseup. Two axes so a single drag
+// can capture both freq + gain snaps independently.
+let capturedFreqSnap: number | null = null;
+let capturedGainSnap: number | null = null;
+
+// Bias `value` toward whichever snap is within `threshold` canvas pixels.
+// `toCanvasPx` translates a value into the same pixel-space as the
+// raw cursor — comparing in pixels keeps the magnetic feel uniform.
+//
+// Returns the captured snap value (for tick-mark rendering) plus the
+// possibly-biased final value. When no snap is captured, returns the
+// input value untouched.
+export function applySnap(
+	value: number,
+	snaps: number[],
+	threshold: number,
+	toCanvasPx: (v: number) => number,
+): { value: number; captured: number | null } {
+	const valuePx = toCanvasPx(value);
+	let bestSnap: number | null = null;
+	let bestDist = threshold;
+	for (const s of snaps) {
+		const d = Math.abs(toCanvasPx(s) - valuePx);
+		if (d < bestDist) {
+			bestDist = d;
+			bestSnap = s;
+		}
+	}
+	if (bestSnap === null) return { value, captured: null };
+	// Bias linearly: at the snap → snap exactly; at the threshold →
+	// untouched. So small "near" wobbles still pull, but the user can
+	// always escape by overshooting the threshold.
+	const t = 1 - bestDist / threshold;
+	const blended = value + (bestSnap - value) * t;
+	return { value: blended, captured: bestSnap };
+}
+
+// Feature A — live audio spectrum painted under the EQ curve. Walks
+// pixel columns at ~2 px stride, samples the analyser, draws a filled
+// gradient region from the chart bottom up to the per-column dB.
+//
+// dB scale: the analyser is configured min/max -100/-10 dB. We map that
+// linearly onto the chart height so the spectrum fills the same vertical
+// space as the EQ grid. The fill is intentionally subtle (low alpha) so
+// it sits behind the curve and doesn't distract.
+function drawSpectrum(
+	c: CanvasRenderingContext2D,
+	width: number,
+	height: number,
+) {
+	if (!isSpectrumActive()) return;
+
+	const startX = CONFIG.padding;
+	const endX = width - CONFIG.padding;
+	const baseY = height - CONFIG.padding;
+	const topY = CONFIG.padding;
+	const stride = 2;
+
+	// Build the freq vector first so readSpectrum can process all columns
+	// in one analyser snapshot — avoids tearing across the bar (each
+	// readSpectrum call is one getFloatFrequencyData, so doing it per
+	// column would still be coherent, just wasteful).
+	const freqs: number[] = [];
+	for (let x = startX; x <= endX; x += stride) {
+		freqs.push(xToFreq(x, width));
+	}
+	const dbs = readSpectrum(freqs);
+
+	// Map dB → y. Analyser is clamped to [-100, -10].
+	const minDb = -100;
+	const maxDb = -10;
+	const dbRange = maxDb - minDb;
+	const fill = themeColor("--color-accent-dim", "rgba(85,34,46,0.4)");
+	const stroke = themeColor("--color-accent", "#cf4863");
+
+	c.save();
+	// Filled region.
+	c.beginPath();
+	c.moveTo(startX, baseY);
+	for (let i = 0; i < freqs.length; i++) {
+		const x = startX + i * stride;
+		const db = dbs[i];
+		const norm = Math.max(0, Math.min(1, (db - minDb) / dbRange));
+		const y = baseY - norm * (baseY - topY);
+		c.lineTo(x, y);
+	}
+	c.lineTo(endX, baseY);
+	c.closePath();
+	c.fillStyle = fill;
+	c.globalAlpha = 0.25;
+	c.fill();
+
+	// Stroke for the leading edge.
+	c.beginPath();
+	for (let i = 0; i < freqs.length; i++) {
+		const x = startX + i * stride;
+		const db = dbs[i];
+		const norm = Math.max(0, Math.min(1, (db - minDb) / dbRange));
+		const y = baseY - norm * (baseY - topY);
+		if (i === 0) c.moveTo(x, y);
+		else c.lineTo(x, y);
+	}
+	c.strokeStyle = stroke;
+	c.globalAlpha = 0.4;
+	c.lineWidth = 1;
+	c.stroke();
+	c.restore();
+}
+
+// Animation loop driven by the spectrum feature. Idempotent — calling
+// startSpectrumLoop() twice is a no-op. Stops automatically when the
+// spectrum is no longer active.
+let spectrumRafId = 0;
+function spectrumLoop() {
+	if (!isSpectrumActive()) {
+		spectrumRafId = 0;
+		return;
+	}
+	draw();
+	spectrumRafId = requestAnimationFrame(spectrumLoop);
+}
+
+export function startSpectrumLoop() {
+	if (spectrumRafId !== 0) return;
+	if (typeof requestAnimationFrame === "undefined") return;
+	spectrumRafId = requestAnimationFrame(spectrumLoop);
+}
+
+export function stopSpectrumLoop() {
+	if (spectrumRafId && typeof cancelAnimationFrame !== "undefined") {
+		cancelAnimationFrame(spectrumRafId);
+	}
+	spectrumRafId = 0;
+	// Final repaint so the spectrum fill clears.
+	draw();
+}
+
+// Draw a small red tick mark at the snapped value's axis position.
+// `axis` selects x-axis (freq, drawn at the bottom) or y-axis (gain,
+// drawn at the left edge).
+function drawSnapTick(
+	c: CanvasRenderingContext2D,
+	width: number,
+	height: number,
+	axis: "x" | "y",
+	value: number,
+) {
+	const accent = themeColor("--color-accent", "#cf4863");
+	c.save();
+	c.strokeStyle = accent;
+	c.lineWidth = 2;
+	if (axis === "x") {
+		const x = freqToX(value, width);
+		const baseY = height - CONFIG.padding;
+		c.beginPath();
+		c.moveTo(x, baseY);
+		c.lineTo(x, baseY + 6);
+		c.stroke();
+	} else {
+		const y = gainToY(value, height);
+		const baseX = CONFIG.padding;
+		c.beginPath();
+		c.moveTo(baseX - 6, y);
+		c.lineTo(baseX, y);
+		c.stroke();
+	}
+	c.restore();
+}
+
 // Feature 3 — engage solo on the given hardware slot. Snapshots the
 // enabled state first so exiting restores exactly what was there. All
 // mutations route through the update callback so history + persistence
@@ -1232,14 +1427,33 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 			CONFIG.padding,
 			Math.min(rect.height - CONFIG.padding, relY),
 		);
-		const freq = Math.round(xToFreq(clampedX, rect.width));
+		const freqRaw = xToFreq(clampedX, rect.width);
+		// Feature E — magnetic snap on freq. Compare in canvas pixels so the
+		// pull "feels" the same regardless of where on the log scale we are.
+		const freqSnap = applySnap(
+			freqRaw,
+			FREQ_SNAPS,
+			SNAP_THRESHOLD_PX,
+			(v) => freqToX(v, rect.width),
+		);
+		capturedFreqSnap = freqSnap.captured;
+		const freq = Math.round(freqSnap.value);
 		// Alt-drag reduces the gain quantization step from 0.1 to 0.02 per
 		// pixel so users can dial in small boosts without a fine-control
 		// input. Freq stays at 1 Hz per pixel in both modes.
 		const gainRaw = yToGain(clampedY, rect.height);
+		// Magnetic snap on gain. Applied to both fine + coarse drags; the
+		// snap pull is small (6 px) so it doesn't fight the drag.
+		const gainSnap = applySnap(
+			gainRaw,
+			GAIN_SNAPS,
+			SNAP_THRESHOLD_PX,
+			(v) => gainToY(v, rect.height),
+		);
+		capturedGainSnap = gainSnap.captured;
 		const gain = e.altKey
-			? Math.round(gainRaw * 50) / 50
-			: Math.round(gainRaw * 10) / 10;
+			? Math.round(gainSnap.value * 50) / 50
+			: Math.round(gainSnap.value * 10) / 10;
 		handleUpdate(draggingIndex, "freq", freq);
 		// Gainless types: freq-only drags. Don't write a gain that's
 		// ignored by computeBiquad — stays cleaner in history.
@@ -1247,12 +1461,17 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 		if (band && typeHasGain(band.type)) {
 			handleUpdate(draggingIndex, "gain", gain);
 		}
+		// handleUpdate already triggers a draw — capture flags above are
+		// picked up by the next drawSnapTicks call inside draw().
 	});
 
 	window.addEventListener("mouseup", (e) => {
 		if (draggingIndex === null) return;
 		const finishedIdx = draggingIndex;
 		draggingIndex = null;
+		// Feature E — snap ticks only show during an active drag.
+		capturedFreqSnap = null;
+		capturedGainSnap = null;
 
 		// If the pointer never moved past threshold, this was a click —
 		// dispatch modifier-click actions. Regular clicks fall through to
