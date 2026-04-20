@@ -1182,6 +1182,116 @@ body[data-alt-hold="1"] .kbd-chip {
 	outline-offset: -2px;
 }
 
+/* Empty-state card — rendered by emptyStateCard.ts as a DOM overlay
+   centred over #eqContainer when no device/preset/target/measurement are
+   present and the user hasn't dismissed it this session. The card lives
+   inside #eqContainer (which is position:relative) so it inherits the
+   canvas box without covering the whole app surface. */
+.empty-state-card {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	width: 420px;
+	max-width: calc(100% - 32px);
+	padding: 24px;
+	background: var(--color-surface-1);
+	border: 1px solid var(--color-border);
+	border-radius: 4px;
+	z-index: 4;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	opacity: 0;
+	animation: empty-state-card-in 200ms ease-out forwards;
+}
+.empty-state-card.is-leaving {
+	animation: empty-state-card-out 160ms ease-in forwards;
+	pointer-events: none;
+}
+@keyframes empty-state-card-in {
+	from { opacity: 0; transform: translate(-50%, calc(-50% + 4px)); }
+	to   { opacity: 1; transform: translate(-50%, -50%); }
+}
+@keyframes empty-state-card-out {
+	from { opacity: 1; }
+	to   { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.empty-state-card,
+	.empty-state-card.is-leaving {
+		animation: none;
+		opacity: 1;
+	}
+}
+.empty-state-card__header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+}
+.empty-state-card__eyebrow {
+	font-family: var(--font-mono);
+	font-size: 9px;
+	letter-spacing: 0.22em;
+	text-transform: uppercase;
+	color: var(--color-text-3);
+	padding-top: 2px;
+}
+.empty-state-card__dismiss {
+	padding: 2px;
+	margin: -4px -4px 0 0;
+}
+.empty-state-card__headline {
+	margin: 0;
+	font-size: 16px;
+	font-weight: 600;
+	color: var(--color-text-1);
+	letter-spacing: 0;
+}
+.empty-state-card__body {
+	margin: 0;
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--color-text-2);
+}
+.empty-state-card__actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 4px;
+}
+.empty-state-card__action {
+	flex: 1;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	min-height: 36px;
+	padding: 8px 10px;
+	background: transparent;
+	color: var(--color-text-1);
+	border: 1px solid var(--color-border);
+	border-radius: 3px;
+	font-size: 11px;
+	font-family: inherit;
+	cursor: pointer;
+	transition: border-color 150ms, background 150ms;
+}
+.empty-state-card__action:hover {
+	background: var(--color-surface-2);
+	border-color: var(--color-border-strong);
+}
+.empty-state-card__action:focus-visible {
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+.empty-state-card__action svg {
+	color: var(--color-text-3);
+	flex-shrink: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+	.empty-state-card__action { transition: none; }
+}
+
 /* Touch-target inflation for coarse pointers (touch, stylus). Desktop
    density is preserved under fine pointers; touch users get ≥40px hit
    areas without re-theming the whole app. */

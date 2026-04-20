@@ -147,6 +147,7 @@ import { getTimeline, recordEvent, restoreEvent } from "./sessionTimeline.ts";
 import { haptic } from "./haptic.ts";
 import { reduceToNBands } from "./reduceBands.ts";
 import { evaluateNumericInput } from "./numericInput.ts";
+import { paintEmptyStateCard } from "./emptyStateCard.ts";
 
 // Tier 3 #7 / #9 — ghost-overlay preview state. When set, renderUI swaps
 // the inactive-slot overlay for these bands so the user can "try on" a
@@ -629,6 +630,7 @@ function renderPresetHeader() {
 	}
 
 	paintPresetActionPrimary();
+	paintEmptyStateCard();
 }
 
 // State-aware primary for the preset action bar:

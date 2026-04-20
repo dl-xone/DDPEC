@@ -16,6 +16,7 @@ import {
 import { initTheme } from "./theme.ts";
 import { setGlobalGain } from "./helpers.ts";
 import { importProfile } from "./importExport.ts";
+import { initEmptyStateCard } from "./emptyStateCard.ts";
 
 export type Band = {
 	index: number;
@@ -34,6 +35,7 @@ initState();
 // Session restore must run after initState() so the wiring it patches
 // (mode buttons, tabs, log tray) already exists in the DOM.
 initSession();
+initEmptyStateCard();
 
 /**
  * Helper: dynamically import a named export from fn.ts and call it.
