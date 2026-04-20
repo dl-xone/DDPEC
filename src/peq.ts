@@ -69,6 +69,9 @@ let onUpdateCallback:
 let onAddBandCallback: (() => void) | null = null;
 let onRemoveBandCallback: (() => void) | null = null;
 let onDeleteBandCallback: ((arrayIdx: number) => void) | null = null;
+// Right-click-add: called with the (freq, gain) the cursor was over. peq.ts
+// doesn't know about hardware slot indices, so fn.ts picks the next free one.
+let onAddBandAtCallback: ((freq: number, gain: number) => void) | null = null;
 let getBandCountCapCallback: (() => { min: number; max: number }) | null = null;
 
 // Feature 3 — solo/mute + ergonomic wins. `soloedIndex` points at a band's
@@ -1004,6 +1007,10 @@ export interface RenderPEQOptions {
 	// (not hardware slot) of the band that was dragged past the canvas
 	// bounds. The caller handles snapshot + removal + rerender.
 	onDeleteBand?: (arrayIdx: number) => void;
+	// Right-click-add: cursor-positioned band insert. peq.ts hit-tests the
+	// contextmenu against existing bands; a miss calls this with the (freq,
+	// gain) under the cursor. A hit on a band routes to onDeleteBand instead.
+	onAddBandAt?: (freq: number, gain: number) => void;
 	// Feature 7 — render the delta (active − inactive) line in dB.
 	showDelta?: boolean;
 	// Feature 8 — render the summed-phase response.
@@ -1025,6 +1032,7 @@ export function renderPEQ(
 	onAddBandCallback = options.onAddBand ?? null;
 	onRemoveBandCallback = options.onRemoveBand ?? null;
 	onDeleteBandCallback = options.onDeleteBand ?? null;
+	onAddBandAtCallback = options.onAddBandAt ?? null;
 	getBandCountCapCallback = options.getBandCountCap ?? null;
 	showDelta = options.showDelta ?? false;
 	showPhase = options.showPhase ?? false;
@@ -1474,6 +1482,45 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 			// Seed the zero-cross tracker with the dragging band's current sign.
 			const startGain = localBands[closestArrayIdx].gain;
 			dragPrevGainSign = startGain === 0 ? 0 : startGain > 0 ? 1 : -1;
+		}
+	});
+
+	// Right-click → add band at cursor, OR remove band under cursor.
+	// Suppresses the native context menu so the gesture is ours.
+	el.addEventListener("contextmenu", (e) => {
+		e.preventDefault();
+		const rect = el.getBoundingClientRect();
+		const scaleX = (el as any).logicalWidth / rect.width;
+		const scaleY = (el as any).logicalHeight / rect.height;
+		const x = (e.clientX - rect.left) * scaleX;
+		const y = (e.clientY - rect.top) * scaleY;
+		const w = (el as any).logicalWidth;
+		const h = (el as any).logicalHeight;
+
+		// Hit-test against existing bands with the same radius as mousedown.
+		let hitArrayIdx = -1;
+		let minDst = 1000;
+		localBands.forEach((band, arrayIdx) => {
+			const bx = freqToX(band.freq, w);
+			const by = gainToY(band.gain, h);
+			const dist = Math.sqrt((x - bx) ** 2 + (y - by) ** 2);
+			if (dist < 22 && dist < minDst) {
+				minDst = dist;
+				hitArrayIdx = arrayIdx;
+			}
+		});
+
+		if (hitArrayIdx !== -1) {
+			// Right-click on a band → remove it.
+			onDeleteBandCallback?.(hitArrayIdx);
+			return;
+		}
+
+		// Miss → add a new band at the cursor's (freq, gain).
+		if (onAddBandAtCallback) {
+			const freq = xToFreq(x, w);
+			const gain = yToGain(y, h);
+			onAddBandAtCallback(freq, gain);
 		}
 	});
 

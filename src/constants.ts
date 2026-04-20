@@ -64,14 +64,18 @@ export const CMD_FIIO = {
 /**
  * DEFAULT SETTINGS (Based on user request)
  */
-export const DEFAULT_FREQS = [40, 100, 250, 500, 1000, 3000, 8000, 16000];
+export const DEFAULT_FREQS = [
+	31, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000,
+];
 export const DEFAULT_LABELS = [
 	"Sub-Bass",
 	"Bass",
+	"Low-Bass",
 	"Low-Mids",
 	"Mids",
 	"Mids",
 	"High-Mids",
 	"Presence",
+	"Brilliance",
 	"Air",
 ];

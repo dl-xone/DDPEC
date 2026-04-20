@@ -737,6 +737,7 @@ export function renderUI(eqState: EQ) {
 			onAddBand: addBandHandler,
 			onRemoveBand: removeBandHandler,
 			onDeleteBand: deleteBandHandler,
+			onAddBandAt: addBandHandlerAt,
 			getBandCountCap: getBandCountCap,
 			// Delta line depends on the A/B overlay being visible (it
 			// compares active vs inactive — useless if inactive is off).
@@ -773,6 +774,49 @@ export function deleteBandHandler(arrayIdx: number) {
 		log(`Removed band at ${Math.round(removed.freq)} Hz (dragged off canvas).`);
 		recordEvent(`Removed band at ${Math.round(removed.freq)} Hz`);
 	}
+}
+
+// Right-click add: drop a new band at the cursor's (freq, gain) position.
+// Used by peq.ts's contextmenu handler. Same caps + history + persistence
+// plumbing as addBandHandler, just with a caller-supplied placement.
+export function addBandHandlerAt(freq: number, gain: number) {
+	const cap = getBandCountCap();
+	const eq = getEqState();
+	if (eq.length >= cap.max) {
+		toast(`Max ${cap.max} bands for this device`);
+		return;
+	}
+
+	// Clamp to reasonable bounds so a click at the canvas edge can't produce
+	// a nonsense band.
+	const clampedFreq = Math.min(20000, Math.max(20, Math.round(freq)));
+	const clampedGain = Math.min(20, Math.max(-20, Math.round(gain * 10) / 10));
+
+	// Pick the lowest unused hardware slot index so deletions free up slots
+	// for reuse (critical for connected devices that cap at maxFilters).
+	const used = new Set(eq.map((b) => b.index));
+	let nextIdx = 0;
+	while (used.has(nextIdx)) nextIdx++;
+
+	const newBand: Band = {
+		index: nextIdx,
+		freq: clampedFreq,
+		gain: clampedGain,
+		q: 0.75,
+		type: "PK",
+		enabled: true,
+	};
+
+	snapshot();
+	addBand(newBand);
+	renderUI(getEqState());
+	updateHistoryButtons();
+	const cfg = getActiveConfig();
+	if (cfg) persistProfile(cfg.key);
+	log(
+		`Added band ${nextIdx + 1} at ${clampedFreq} Hz (${clampedGain >= 0 ? "+" : ""}${clampedGain} dB).`,
+	);
+	recordEvent(`Added band at ${clampedFreq} Hz`);
 }
 
 // Band-count cap. Connected → device's maxFilters (hardware floor for
@@ -3502,6 +3546,7 @@ function wireTimelineStrip() {
 						onAddBand: addBandHandler,
 						onRemoveBand: removeBandHandler,
 						onDeleteBand: deleteBandHandler,
+						onAddBandAt: addBandHandlerAt,
 						getBandCountCap: getBandCountCap,
 						// Preserve the active overlay settings so the ghost preview
 						// renders with the same decorations the user already has on.
