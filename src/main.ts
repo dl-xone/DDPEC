@@ -17,6 +17,52 @@ import { initTheme } from "./theme.ts";
 import { setGlobalGain } from "./helpers.ts";
 import { importProfile } from "./importExport.ts";
 import { initEmptyStateCard } from "./emptyStateCard.ts";
+import { selectBandByPosition } from "./peq.ts";
+import { getActiveSlot } from "./state.ts";
+
+// Polite live region — screen readers announce band selections + edits
+// without stealing focus from the canvas. Single node, reused; updates
+// throttled via a microtask queue so rapid arrow presses don't overwhelm.
+let announceNode: HTMLElement | null = null;
+let announcePending: string | null = null;
+
+function ensureAnnouncer(): HTMLElement {
+	if (announceNode) return announceNode;
+	const n = document.createElement("div");
+	n.id = "eqLiveRegion";
+	n.className = "sr-only";
+	n.setAttribute("role", "status");
+	n.setAttribute("aria-live", "polite");
+	n.setAttribute("aria-atomic", "true");
+	document.body.appendChild(n);
+	announceNode = n;
+	return n;
+}
+
+function announceBandSelection(
+	bandIndex: number,
+	freq: number,
+	gain: number,
+): void {
+	const slot = getActiveSlot();
+	const freqLabel = freq >= 1000 ? `${(freq / 1000).toFixed(1)} kilohertz` : `${Math.round(freq)} hertz`;
+	const gainLabel =
+		gain === 0 ? "0 decibels" : `${gain > 0 ? "+" : ""}${gain.toFixed(1)} decibels`;
+	const text = `Slot ${slot}, band ${bandIndex + 1}, ${freqLabel}, ${gainLabel}`;
+	announcePending = text;
+	const node = ensureAnnouncer();
+	// Flip textContent in a microtask so the region actually re-announces
+	// even when the same band gets re-selected (screen readers ignore
+	// identical content otherwise).
+	queueMicrotask(() => {
+		if (announcePending === null) return;
+		node.textContent = "";
+		setTimeout(() => {
+			node.textContent = announcePending ?? "";
+			announcePending = null;
+		}, 50);
+	});
+}
 
 export type Band = {
 	index: number;
@@ -210,6 +256,23 @@ window.addEventListener("keydown", (e) => {
 		target instanceof HTMLSelectElement ||
 		target instanceof HTMLTextAreaElement
 	) {
+		return;
+	}
+
+	// Digits 1-9 and 0 select bands by visual (freq-sorted) position.
+	// Matches the "Band N" labels in the tabular editor so digit 1 grabs
+	// Band 1, digit 0 grabs Band 10. Focuses the canvas so subsequent
+	// arrow keys arrow-edit the just-selected band without a Tab.
+	if (
+		!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
+		e.key.length === 1 && e.key >= "0" && e.key <= "9"
+	) {
+		const pos = e.key === "0" ? 9 : Number(e.key) - 1;
+		const band = selectBandByPosition(pos);
+		if (band) {
+			e.preventDefault();
+			announceBandSelection(band.index, band.freq, band.gain);
+		}
 		return;
 	}
 

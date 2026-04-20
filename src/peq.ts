@@ -189,6 +189,33 @@ function getMagnitude(
 /**
  * CANVAS RENDERING
  */
+// Select a band by its *visual* position (0-based freq-sorted). Digit
+// keys in main.ts map 1-9 to positions 0-8 and 0 to position 9. Focuses
+// the canvas so the subsequent arrow-edit flows naturally without a Tab.
+// Returns the band that got selected so callers can update screen-reader
+// announcements or similar side-effects.
+export function selectBandByPosition(pos: number): Band | null {
+	if (localBands.length === 0) return null;
+	if (pos < 0 || pos >= localBands.length) return null;
+	const view = sortedView(localBands);
+	const hit = view[pos];
+	if (!hit) return null;
+	selectedIndex = hit.band.index;
+	syncBandTable(localBands);
+	draw();
+	const canvas = document.getElementById("eqCanvas") as HTMLCanvasElement | null;
+	canvas?.focus({ preventScroll: true });
+	return hit.band;
+}
+
+// Expose the currently selected band (read-only) so callers outside the
+// canvas can announce it to screen readers. Returns null when nothing is
+// selected or the selection points at a stale hardware index.
+export function getSelectedBand(): Band | null {
+	if (selectedIndex === null) return null;
+	return localBands.find((b) => b.index === selectedIndex) ?? null;
+}
+
 export function resizeCanvas() {
 	if (!canvas || !ctx) return;
 	const parent = canvas.parentElement;
