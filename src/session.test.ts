@@ -1,0 +1,240 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	flushSession,
+	getSession,
+	isFirstRunEligible,
+	loadSession,
+	resetSessionForTest,
+	saveSession,
+} from "./session.ts";
+
+// Minimal Map-backed localStorage shim. Tests run under node with no DOM,
+// so we plumb one onto globalThis for the session module to consume.
+function installLocalStorage(store: Map<string, string>) {
+	const shim = {
+		getItem(key: string) {
+			return store.has(key) ? (store.get(key) ?? null) : null;
+		},
+		setItem(key: string, value: string) {
+			store.set(key, String(value));
+		},
+		removeItem(key: string) {
+			store.delete(key);
+		},
+		clear() {
+			store.clear();
+		},
+		key(i: number) {
+			return Array.from(store.keys())[i] ?? null;
+		},
+		get length() {
+			return store.size;
+		},
+	};
+	(globalThis as unknown as { localStorage: typeof shim }).localStorage = shim;
+}
+
+function uninstallLocalStorage() {
+	delete (globalThis as unknown as { localStorage?: unknown }).localStorage;
+}
+
+describe("session", () => {
+	let store: Map<string, string>;
+	beforeEach(() => {
+		store = new Map();
+		installLocalStorage(store);
+		resetSessionForTest();
+	});
+
+	afterEach(() => {
+		resetSessionForTest();
+		uninstallLocalStorage();
+	});
+
+	it("loadSession returns empty object when nothing persisted", () => {
+		expect(loadSession()).toEqual({});
+	});
+
+	it("getSession returns defaults when nothing persisted", () => {
+		const s = getSession();
+		expect(s.activeSlot).toBe("A");
+		expect(s.eqEnabled).toBe(true);
+		expect(s.navTab).toBe("dsp");
+		expect(s.bottomPanelTab).toBe("tabular");
+		expect(s.logTrayExpanded).toBe(false);
+		expect(s.selectedPresetId).toBeNull();
+		expect(s.lastDeviceKey).toBeNull();
+	});
+
+	it("save + load roundtrips a patch", () => {
+		saveSession({ activeSlot: "B", navTab: "device", selectedPresetId: "warm" });
+		flushSession();
+		const loaded = loadSession();
+		expect(loaded.activeSlot).toBe("B");
+		expect(loaded.navTab).toBe("device");
+		expect(loaded.selectedPresetId).toBe("warm");
+	});
+
+	it("saveSession merges into existing state rather than replacing", () => {
+		saveSession({ activeSlot: "B" });
+		saveSession({ navTab: "device" });
+		flushSession();
+		const loaded = loadSession();
+		expect(loaded.activeSlot).toBe("B");
+		expect(loaded.navTab).toBe("device");
+	});
+
+	it("malformed JSON in storage returns defaults", () => {
+		store.set("ddpec.session", "{not json");
+		resetSessionForTest();
+		expect(loadSession()).toEqual({});
+		expect(getSession().activeSlot).toBe("A");
+	});
+
+	it("ignores unknown / wrong-type fields when loading", () => {
+		store.set(
+			"ddpec.session",
+			JSON.stringify({
+				activeSlot: "C", // invalid enum
+				eqEnabled: "yes", // wrong type
+				navTab: "device", // valid
+				mystery: 42, // unknown
+			}),
+		);
+		const loaded = loadSession();
+		expect(loaded.activeSlot).toBeUndefined();
+		expect(loaded.eqEnabled).toBeUndefined();
+		expect(loaded.navTab).toBe("device");
+		expect((loaded as Record<string, unknown>).mystery).toBeUndefined();
+	});
+
+	it("flushSession writes pending state immediately", () => {
+		saveSession({ logTrayExpanded: true });
+		// Before flush, write may still be in debounce window. After flush,
+		// the value is definitely in storage.
+		flushSession();
+		const raw = store.get("ddpec.session");
+		expect(raw).toBeTruthy();
+		const parsed = JSON.parse(raw ?? "{}");
+		expect(parsed.logTrayExpanded).toBe(true);
+	});
+
+	it("Phase 2 toggles default correctly and roundtrip through storage", () => {
+		const s = getSession();
+		expect(s.abOverlay).toBe("auto");
+		expect(s.showDelta).toBe(false);
+		expect(s.showPhase).toBe(false);
+		expect(s.exportFormat).toBe("json");
+
+		saveSession({
+			abOverlay: "hidden",
+			showDelta: true,
+			showPhase: true,
+			exportFormat: "eapo",
+		});
+		flushSession();
+		resetSessionForTest();
+		const reloaded = getSession();
+		expect(reloaded.abOverlay).toBe("hidden");
+		expect(reloaded.showDelta).toBe(true);
+		expect(reloaded.showPhase).toBe(true);
+		expect(reloaded.exportFormat).toBe("eapo");
+	});
+
+	it("rejects invalid exportFormat values on load", () => {
+		store.set(
+			"ddpec.session",
+			JSON.stringify({ exportFormat: "mystery" }),
+		);
+		const loaded = loadSession();
+		expect(loaded.exportFormat).toBeUndefined();
+	});
+
+	it("getSession picks up previously persisted values on cold start", () => {
+		store.set(
+			"ddpec.session",
+			JSON.stringify({ activeSlot: "B", navTab: "device" }),
+		);
+		resetSessionForTest();
+		const s = getSession();
+		expect(s.activeSlot).toBe("B");
+		expect(s.navTab).toBe("device");
+	});
+
+	it("Feature J — firstRunComplete and connectNudgeShown default to false", () => {
+		const s = getSession();
+		expect(s.firstRunComplete).toBe(false);
+		expect(s.connectNudgeShown).toBe(false);
+	});
+
+	it("Feature J — first-run flags roundtrip through storage", () => {
+		saveSession({ firstRunComplete: true, connectNudgeShown: true });
+		flushSession();
+		resetSessionForTest();
+		const s = getSession();
+		expect(s.firstRunComplete).toBe(true);
+		expect(s.connectNudgeShown).toBe(true);
+	});
+
+	it("Feature J — isFirstRunEligible returns false once the flag is set", () => {
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: true,
+				hasTarget: false,
+				hasMeasurement: false,
+				hasUserPresets: false,
+			}),
+		).toBe(false);
+	});
+
+	it("Feature J — isFirstRunEligible returns true on a clean slate", () => {
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: false,
+				hasTarget: false,
+				hasMeasurement: false,
+				hasUserPresets: false,
+			}),
+		).toBe(true);
+	});
+
+	it("Feature J — isFirstRunEligible returns false when user has existing data", () => {
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: false,
+				hasTarget: true,
+				hasMeasurement: false,
+				hasUserPresets: false,
+			}),
+		).toBe(false);
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: false,
+				hasTarget: false,
+				hasMeasurement: true,
+				hasUserPresets: false,
+			}),
+		).toBe(false);
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: false,
+				hasTarget: false,
+				hasMeasurement: false,
+				hasUserPresets: true,
+			}),
+		).toBe(false);
+	});
+
+	it("Feature J — sanitize rejects non-boolean first-run values", () => {
+		store.set(
+			"ddpec.session",
+			JSON.stringify({
+				firstRunComplete: "yes",
+				connectNudgeShown: 1,
+			}),
+		);
+		const loaded = loadSession();
+		expect(loaded.firstRunComplete).toBeUndefined();
+		expect(loaded.connectNudgeShown).toBeUndefined();
+	});
+});

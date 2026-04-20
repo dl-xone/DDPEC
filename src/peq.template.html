@@ -1,0 +1,13 @@
+<div id="peq-root" class="flex flex-col h-full text-text-1">
+	<div class="relative flex-1 min-h-[260px]">
+		<canvas id="eqCanvas" tabindex="0" aria-label="Equalizer curve. Tab to focus. Digits 1 through 0 select band 1 through 10. Arrow keys adjust frequency and gain. Alt plus arrow up or down adjusts Q. Escape deselects." class="w-full h-full cursor-crosshair block"></canvas>
+	</div>
+
+	<!-- Add/remove band controls. peq.ts renderPEQ fills this in when the
+	     caller wires `onAddBand` / `onRemoveBand`. Hidden otherwise. -->
+	<div id="bandEditorHeader" class="flex items-center justify-end gap-2 px-4 pt-2 pb-1"></div>
+
+	<div id="bandEditor" class="px-4 py-2 overflow-x-auto">
+		<div id="bandTable" class="min-w-max"></div>
+	</div>
+</div>
