@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	flushSession,
 	getSession,
+	isFirstRunEligible,
 	loadSession,
 	resetSessionForTest,
 	saveSession,
@@ -158,5 +159,82 @@ describe("session", () => {
 		const s = getSession();
 		expect(s.activeSlot).toBe("B");
 		expect(s.navTab).toBe("device");
+	});
+
+	it("Feature J — firstRunComplete and connectNudgeShown default to false", () => {
+		const s = getSession();
+		expect(s.firstRunComplete).toBe(false);
+		expect(s.connectNudgeShown).toBe(false);
+	});
+
+	it("Feature J — first-run flags roundtrip through storage", () => {
+		saveSession({ firstRunComplete: true, connectNudgeShown: true });
+		flushSession();
+		resetSessionForTest();
+		const s = getSession();
+		expect(s.firstRunComplete).toBe(true);
+		expect(s.connectNudgeShown).toBe(true);
+	});
+
+	it("Feature J — isFirstRunEligible returns false once the flag is set", () => {
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: true,
+				hasTarget: false,
+				hasMeasurement: false,
+				hasUserPresets: false,
+			}),
+		).toBe(false);
+	});
+
+	it("Feature J — isFirstRunEligible returns true on a clean slate", () => {
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: false,
+				hasTarget: false,
+				hasMeasurement: false,
+				hasUserPresets: false,
+			}),
+		).toBe(true);
+	});
+
+	it("Feature J — isFirstRunEligible returns false when user has existing data", () => {
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: false,
+				hasTarget: true,
+				hasMeasurement: false,
+				hasUserPresets: false,
+			}),
+		).toBe(false);
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: false,
+				hasTarget: false,
+				hasMeasurement: true,
+				hasUserPresets: false,
+			}),
+		).toBe(false);
+		expect(
+			isFirstRunEligible({
+				firstRunComplete: false,
+				hasTarget: false,
+				hasMeasurement: false,
+				hasUserPresets: true,
+			}),
+		).toBe(false);
+	});
+
+	it("Feature J — sanitize rejects non-boolean first-run values", () => {
+		store.set(
+			"ddpec.session",
+			JSON.stringify({
+				firstRunComplete: "yes",
+				connectNudgeShown: 1,
+			}),
+		);
+		const loaded = loadSession();
+		expect(loaded.firstRunComplete).toBeUndefined();
+		expect(loaded.connectNudgeShown).toBeUndefined();
 	});
 });

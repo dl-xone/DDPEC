@@ -58,6 +58,13 @@ export interface SessionState {
 	spectrumSource: SpectrumSource;
 	// Feature D — score of the most recent ABX run. Null until first run.
 	lastAbxScore: AbxScore | null;
+	// Feature J — one-way flag that flips true the first time the user
+	// either clicks AutoEQ or manually loads a preset. Gates the bundled
+	// sample-measurement / sample-target preload + the AutoEQ pulse.
+	firstRunComplete: boolean;
+	// Feature J — secondary nudge after 30 s telling the user to connect
+	// a device. One-shot: true once shown, never re-shown.
+	connectNudgeShown: boolean;
 }
 
 const STORAGE_KEY = "ddpec.session";
@@ -95,6 +102,8 @@ const DEFAULTS: SessionState = {
 	exportFormat: "json",
 	spectrumSource: "off",
 	lastAbxScore: null,
+	firstRunComplete: false,
+	connectNudgeShown: false,
 };
 
 let current: SessionState = { ...DEFAULTS };
@@ -154,6 +163,10 @@ function sanitize(raw: unknown): Partial<SessionState> {
 	} else if (o.lastAbxScore === null) {
 		out.lastAbxScore = null;
 	}
+	if (typeof o.firstRunComplete === "boolean")
+		out.firstRunComplete = o.firstRunComplete;
+	if (typeof o.connectNudgeShown === "boolean")
+		out.connectNudgeShown = o.connectNudgeShown;
 	return out;
 }
 
@@ -224,6 +237,26 @@ export function flushSession() {
 	} catch {
 		// ignore
 	}
+}
+
+/**
+ * Feature J — pure onboarding predicate. Returns true when the conditions
+ * for the first-run demo flow are all met: the user has no existing
+ * target, no measurement, no user presets, and the session flag is still
+ * false. Separate from the fn.ts wrapper so it can be unit-tested without
+ * touching the DOM-flavored modules.
+ */
+export function isFirstRunEligible(opts: {
+	firstRunComplete: boolean;
+	hasTarget: boolean;
+	hasMeasurement: boolean;
+	hasUserPresets: boolean;
+}): boolean {
+	if (opts.firstRunComplete) return false;
+	if (opts.hasTarget) return false;
+	if (opts.hasMeasurement) return false;
+	if (opts.hasUserPresets) return false;
+	return true;
 }
 
 /**

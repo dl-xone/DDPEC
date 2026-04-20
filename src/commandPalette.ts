@@ -14,6 +14,12 @@
 //
 // No dependencies; the modal is built with vanilla DOM.
 
+import {
+	describeInlineEdit,
+	type InlineEdit,
+	parseInlineEdit,
+} from "./commandPaletteInline.ts";
+
 export interface Command {
 	id: string;
 	title: string;
@@ -24,6 +30,19 @@ export interface Command {
 	run: () => void | Promise<void>;
 	// Evaluated at open-time; commands that return false are filtered out.
 	availableWhen?: () => boolean;
+	// Feature H — tags the synthetic inline-edit command so the renderer
+	// can apply a distinct CSS class. Normal registry commands omit this.
+	kind?: "inline-edit";
+}
+
+// Optional handler for inline-edit commands. The DDPEC app wires this in
+// initState so the palette can apply edits without commandPalette.ts
+// importing from fn.ts (circular reference avoidance).
+type InlineEditHandler = (edit: InlineEdit) => void | Promise<void>;
+let inlineEditHandler: InlineEditHandler | null = null;
+
+export function setInlineEditHandler(handler: InlineEditHandler | null): void {
+	inlineEditHandler = handler;
 }
 
 const registry = new Map<string, Command>();
@@ -105,8 +124,26 @@ export function scoreCommand(cmd: Command, query: string): number | null {
 // Filter + sort commands by a query string. Exported separately from the
 // DOM surface so unit tests can poke at the matching logic without a
 // fake DOM. Commands whose `availableWhen` returns false are omitted.
+//
+// Feature H — if the query parses as an inline edit ("gain 3 -5",
+// "preamp -4", etc.), prepend a synthetic command whose run() calls the
+// registered inline-edit handler. Invalid parses fall through to the
+// regular fuzzy search.
 export function filterCommands(query: string): Command[] {
 	const available = listAvailableCommands();
+	const inlineEdit = parseInlineEdit(query);
+	let synthetic: Command | null = null;
+	if (inlineEdit) {
+		synthetic = {
+			id: "inline-edit",
+			title: describeInlineEdit(inlineEdit),
+			kind: "inline-edit",
+			run: async () => {
+				if (inlineEditHandler) await inlineEditHandler(inlineEdit);
+			},
+		};
+	}
+
 	if (!query) {
 		// Stable alphabetical order when no query — the palette opens to
 		// a sensible default list rather than whatever insertion order is.
@@ -119,7 +156,8 @@ export function filterCommands(query: string): Command[] {
 		scored.push({ cmd, score: s });
 	}
 	scored.sort((a, b) => a.score - b.score);
-	return scored.map((s) => s.cmd);
+	const out = scored.map((s) => s.cmd);
+	return synthetic ? [synthetic, ...out] : out;
 }
 
 // --------------------- DOM surface ---------------------
@@ -192,6 +230,9 @@ export function openPalette(): void {
 			const row = document.createElement("button");
 			row.type = "button";
 			row.className = "command-palette-row";
+			if (cmd.kind === "inline-edit") {
+				row.classList.add("command-palette-inline-edit");
+			}
 			row.setAttribute("role", "option");
 			if (i === selectedIdx) {
 				row.classList.add("is-selected");

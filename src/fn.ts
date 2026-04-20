@@ -58,10 +58,12 @@ import {
 	PRESETS,
 	updateUserPreset,
 } from "./presets.ts";
-import { getSession, saveSession } from "./session.ts";
+import { getSession, isFirstRunEligible, saveSession } from "./session.ts";
 import {
 	getPlayingType,
 	playPinkNoise,
+	playReferenceFile,
+	playSine500,
 	playSineSweep,
 	playWhiteNoise,
 	stopSignal,
@@ -91,7 +93,9 @@ import {
 	type Command,
 	openPalette,
 	registerCommand,
+	setInlineEditHandler,
 } from "./commandPalette.ts";
+import type { InlineEdit } from "./commandPaletteInline.ts";
 import {
 	addBand,
 	defaultEqState,
@@ -139,6 +143,16 @@ export { openPalette } from "./commandPalette.ts";
 
 import { morphToBands } from "./morph.ts";
 import { initShortcutOverlay, registerShortcut } from "./shortcutOverlay.ts";
+import { getTimeline, recordEvent, restoreEvent } from "./sessionTimeline.ts";
+
+// Feature J — marker function lives further down in this file. Forward
+// reference so the preset / AutoEQ call sites above can call through it.
+// Hoisting a function declaration keeps the reference order sane without
+// a circular-import dance.
+let markFirstRunCompleteImpl: (() => void) | null = null;
+function markFirstRunComplete(): void {
+	markFirstRunCompleteImpl?.();
+}
 
 export function initState() {
 	renderUI(getEqState());
@@ -260,6 +274,54 @@ export function initState() {
 	// Feature D — ABX harness button + last-score subtitle.
 	wireAbxButton();
 	paintAbxSubtitle();
+
+	// Feature H — command-palette inline edit handler. Finds the band by
+	// hardware-slot index (band.index + 1, stable across sort/add/remove),
+	// not array position. Delegates to setBandField / setGlobalGain so
+	// history + persistence follow the normal edit path.
+	setInlineEditHandler(applyInlineEdit);
+
+	// Feature I — timeline strip DOM surface sits above the log console.
+	// Wired once here so timeline events emitted during initial state
+	// restore (if any) show up.
+	wireTimelineStrip();
+
+	// Feature J — sanity-check onboarding at boot. Runs async so initState
+	// stays synchronous; errors inside runFirstRunOnboarding get logged
+	// but never block the UI.
+	void runFirstRunOnboarding();
+}
+
+// Feature H — apply a parsed inline edit. Logic intentionally mirrors
+// the tabular editor's setBandField path so persistence + history stay
+// consistent; no new dirty-flip semantics introduced.
+async function applyInlineEdit(edit: InlineEdit): Promise<void> {
+	if (edit.kind === "preamp") {
+		snapshot();
+		setGlobalGainState(edit.value as number);
+		updateGlobalGainUI(edit.value as number);
+		renderUI(getEqState());
+		updateHistoryButtons();
+		toast(`Pre-amp → ${edit.value} dB`);
+		return;
+	}
+	const targetBand = getEqState().find((b) => b.index === edit.bandIdx - 1);
+	if (!targetBand) {
+		toast(`No band ${edit.bandIdx}`);
+		return;
+	}
+	snapshot();
+	const arrayIdx = getEqState().indexOf(targetBand);
+	if (edit.kind === "type") {
+		setBandField(arrayIdx, "type", edit.value as string);
+	} else {
+		setBandField(arrayIdx, edit.kind, edit.value as number);
+	}
+	renderUI(getEqState());
+	updateHistoryButtons();
+	const cfg = getActiveConfig();
+	if (cfg) persistProfile(cfg.key);
+	toast(`Band ${edit.bandIdx} ${edit.kind} → ${edit.value}`);
 }
 
 // Target-curve picker. Distinct from the measurement loader so the two
@@ -530,6 +592,7 @@ export function deleteBandHandler(arrayIdx: number) {
 	if (removed) {
 		toast(`Removed band ${Math.round(removed.freq)} Hz`);
 		log(`Removed band at ${Math.round(removed.freq)} Hz (dragged off canvas).`);
+		recordEvent(`Removed band at ${Math.round(removed.freq)} Hz`);
 	}
 }
 
@@ -586,6 +649,7 @@ export function addBandHandler() {
 	const cfg = getActiveConfig();
 	if (cfg) persistProfile(cfg.key);
 	log(`Added band ${nextIdx + 1} at ${newFreq} Hz.`);
+	recordEvent(`Added band at ${Math.round(newFreq)} Hz`);
 }
 
 // Remove the currently-selected band. No explicit selection tracked here
@@ -618,6 +682,7 @@ export function removeBandHandler() {
 	if (cfg) persistProfile(cfg.key);
 	if (removed) {
 		log(`Removed band at ${Math.round(removed.freq)} Hz.`);
+		recordEvent(`Removed band at ${Math.round(removed.freq)} Hz`);
 	}
 }
 
@@ -752,6 +817,11 @@ export async function applyPresetFromSidebar(id: string) {
 					? `Loaded preset: ${preset.name}. Sync to apply.`
 					: `Loaded preset: ${preset.name}. Connect a device to apply.`,
 			);
+			recordEvent(`Loaded preset: ${preset.name}`);
+			// Feature J — first-run demo: the user just loaded a preset, so
+			// onboarding has served its purpose even if they never clicked
+			// AutoEQ. Mark it complete so the pulse doesn't fire again.
+			markFirstRunComplete();
 		},
 	});
 }
@@ -759,6 +829,14 @@ export async function applyPresetFromSidebar(id: string) {
 // Switch which in-memory slot is active. The UI re-renders to reflect the
 // freshly-loaded slot contents. The device is NOT re-synced — the user
 // must hit SYNC to push the newly-active EQ to hardware.
+//
+// Feature G — the band values cross-fade between A and B over 150 ms.
+// Implementation: snapshot the old slot's bands, point state at the new
+// slot, capture its bands as the target, then install the *pre-swap*
+// bands (silent) as the visual starting state so morph animates from
+// the right place. The morph's final non-silent setEqState would dirty
+// the destination slot — we guard against that by capturing wasDirty
+// before the swap and calling markSynced in onDone when it was clean.
 export async function activateSlot(slot: SlotName) {
 	if (getActiveSlot() === slot) return;
 	// Wave 4.10 — only prompt when the *current* active slot has unsaved
@@ -775,11 +853,33 @@ export async function activateSlot(slot: SlotName) {
 		if (!ok) return;
 	}
 	snapshot();
+
+	// Capture the visually-current bands before the pointer moves.
+	const fromBands = structuredClone(getEqState());
 	setActiveSlot(slot);
+	const toBands = structuredClone(getEqState());
+	// Remember whether the destination slot was clean — morph's final frame
+	// flips the dirty flag via a non-silent setEqState; we undo that for a
+	// clean slot so the commit bar doesn't spuriously appear.
+	const wasDirty = isDirty(slot);
+	// Install from-bands silently so interpBands animates from the right
+	// starting state rather than snapping to toBands immediately.
+	setEqState(fromBands, { silent: true });
+
 	saveSession({ activeSlot: slot });
-	updateGlobalGainUI(getGlobalGainState());
-	renderUI(getEqState());
-	updateHistoryButtons();
+	// Band count differs → morphToBands falls back to instant swap, which
+	// is still correct behaviour — just no cross-fade.
+	morphToBands(toBands, {
+		duration: 150,
+		onStep: () => renderUI(getEqState()),
+		onDone: () => {
+			if (!wasDirty) markSynced(slot);
+			updateGlobalGainUI(getGlobalGainState());
+			renderUI(getEqState());
+			updateHistoryButtons();
+			recordEvent(`Switched to slot ${slot}`);
+		},
+	});
 	log(`Switched to slot ${slot}.`);
 	const cfg = getActiveConfig();
 	if (cfg) persistProfile(cfg.key);
@@ -787,10 +887,32 @@ export async function activateSlot(slot: SlotName) {
 
 export function swapABSlots() {
 	snapshot();
+	// Feature G — cross-fade the swap too. After `swapSlots()` the active
+	// pointer still refers to the same letter, but the contents flipped.
+	// Capture pre-swap bands, perform the logical swap, read post-swap
+	// bands, reinstall pre-swap silently, then morph.
+	const fromBands = structuredClone(getEqState());
 	swapSlots();
-	updateGlobalGainUI(getGlobalGainState());
-	renderUI(getEqState());
-	updateHistoryButtons();
+	const toBands = structuredClone(getEqState());
+	// Both slots may now be dirty (or both clean) depending on prior state —
+	// swapSlots() already swapped the dirty record, so the active slot's
+	// flag is correct post-swap. The morph's final non-silent write will
+	// re-set the flag to true for the active slot; preserve the original
+	// value by snapshotting it here and restoring in onDone.
+	const wasDirty = isDirty(getActiveSlot());
+	setEqState(fromBands, { silent: true });
+
+	morphToBands(toBands, {
+		duration: 150,
+		onStep: () => renderUI(getEqState()),
+		onDone: () => {
+			if (!wasDirty) markSynced(getActiveSlot());
+			updateGlobalGainUI(getGlobalGainState());
+			renderUI(getEqState());
+			updateHistoryButtons();
+			recordEvent("Swapped A ↔ B");
+		},
+	});
 	const cfg = getActiveConfig();
 	if (cfg) persistProfile(cfg.key);
 	log("Swapped A ↔ B.");
@@ -838,6 +960,7 @@ export async function handleSyncClick() {
 		markSynced(getActiveSlot());
 		renderUI(getEqState());
 		toast("Synced to RAM");
+		recordEvent("Synced to RAM");
 	} catch (err) {
 		progress.close();
 		freezeUIDuringWrite(false);
@@ -877,6 +1000,7 @@ export async function handleFlashClick() {
 		await flashToFlash(undefined, { skipConfirm: true });
 		markSynced(getActiveSlot());
 		toast("Saved to flash");
+		recordEvent("Wrote to flash");
 	} catch (err) {
 		freezeUIDuringWrite(false);
 		btn.classList.remove("is-busy");
@@ -1553,6 +1677,86 @@ export function openSignalGenerator() {
 	);
 
 	content.appendChild(buttons);
+
+	// Feature F — reference audio section. 500 Hz sine plus user-uploaded
+	// voice / music slots, all routed through the current EQ biquad chain
+	// so the user hears the effect of their tuning on real program material.
+	const refHeading = document.createElement("h3");
+	refHeading.className = "text-xs uppercase tracking-wider text-text-3 mt-2";
+	refHeading.textContent = "Reference audio";
+	content.appendChild(refHeading);
+
+	const refHint = document.createElement("p");
+	refHint.className = "text-xs text-gray-400";
+	refHint.textContent =
+		"Plays through the active EQ chain in the browser (not your DAC) so you can preview the tuning on real material.";
+	content.appendChild(refHint);
+
+	const refButtons = document.createElement("div");
+	refButtons.className = "grid grid-cols-2 gap-2";
+
+	refButtons.appendChild(
+		mkButton("500 Hz Sine", () => {
+			playSine500({
+				gainDb: Number(gainSlider.value),
+				bands: getEqState(),
+			});
+			syncStatus();
+		}),
+	);
+	// Sine-sweep is also a natural reference for driver-sweep listening.
+	refButtons.appendChild(
+		mkButton("Sweep 20→20 kHz (10 s)", () => {
+			playSineSweep({ gainDb: Number(gainSlider.value) });
+			syncStatus();
+			setTimeout(syncStatus, 10500);
+		}),
+	);
+
+	content.appendChild(refButtons);
+
+	// File upload slots — user supplies their own voice / music sample.
+	// Clicking a slot button opens a file picker; once selected the
+	// sample starts playing immediately through the EQ chain.
+	const fileRow = document.createElement("div");
+	fileRow.className = "grid grid-cols-2 gap-2";
+
+	function mkFileSlot(label: string): HTMLButtonElement {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.textContent = `${label}…`;
+		btn.title = `Load a local audio file to use as a ${label.toLowerCase()} reference`;
+		btn.className =
+			"px-3 py-2 rounded font-semibold bg-gray-700 text-white text-sm hover:bg-gray-600";
+		const input = document.createElement("input");
+		input.type = "file";
+		input.accept = "audio/*";
+		input.className = "hidden";
+		input.addEventListener("change", async () => {
+			const file = input.files?.[0];
+			if (!file) return;
+			btn.textContent = `${label}: ${file.name}`;
+			try {
+				await playReferenceFile(file, {
+					gainDb: Number(gainSlider.value),
+					bands: getEqState(),
+				});
+				syncStatus();
+			} catch (err) {
+				log(`Reference playback failed: ${(err as Error).message}`);
+			}
+		});
+		btn.addEventListener("click", () => input.click());
+		const wrap = document.createElement("div");
+		wrap.append(btn, input);
+		fileRow.appendChild(wrap);
+		return btn;
+	}
+	mkFileSlot("Voice reference");
+	mkFileSlot("Music reference");
+
+	content.appendChild(fileRow);
+
 	content.appendChild(status);
 
 	syncStatus();
@@ -1821,6 +2025,7 @@ export async function resetToDefaults() {
 
 	await syncToDevice();
 	log("Defaults applied and synced.");
+	recordEvent("Reset to defaults");
 }
 
 export function updateState(
@@ -2705,6 +2910,11 @@ export async function handleAutoEq() {
 	log(
 		`AutoEQ: ${newBands.length} bands placed (tier ${tierB ? "A+B" : "A"}), MSE ${before.toFixed(3)} → ${after.toFixed(3)} dB².`,
 	);
+	recordEvent(
+		`AutoEQ fit (${newBands.length} bands, MSE ${before.toFixed(2)}→${after.toFixed(2)})`,
+	);
+	// Feature J — AutoEQ click is the canonical first-run completion gate.
+	markFirstRunComplete();
 }
 
 function wireEqDisable() {
@@ -2952,6 +3162,89 @@ function wireLogClear() {
 		const latest = document.getElementById("logTrayLatest");
 		if (latest) latest.textContent = "";
 	});
+}
+
+// Feature I — session timeline strip. A horizontal row of colored dots
+// above the expanded log console. Each dot corresponds to a recorded
+// timeline event; color keys category. Hover → tooltip with label +
+// timestamp; click → ghost-preview that state on the canvas; Shift-click
+// → restore it to the active slot. Regenerated whenever the timeline
+// fires `ddpec:timeline-change`.
+function wireTimelineStrip() {
+	const logConsole = document.getElementById("logConsole");
+	if (!logConsole) return;
+	// Build the host container once and insert it before the existing
+	// log lines so the dots sit above the text.
+	let strip = document.getElementById("timelineStrip");
+	if (!strip) {
+		strip = document.createElement("div");
+		strip.id = "timelineStrip";
+		strip.className = "timeline-strip";
+		strip.setAttribute("role", "toolbar");
+		strip.setAttribute("aria-label", "Session timeline");
+		logConsole.insertBefore(strip, logConsole.firstChild);
+	}
+
+	function render() {
+		if (!strip) return;
+		// Drop everything except the container so we can rebuild cleanly.
+		strip.replaceChildren();
+		const entries = getTimeline();
+		if (entries.length === 0) {
+			const empty = document.createElement("span");
+			empty.className = "timeline-empty";
+			empty.textContent = "No events yet.";
+			strip.appendChild(empty);
+			return;
+		}
+		for (const entry of entries) {
+			const dot = document.createElement("button");
+			dot.type = "button";
+			dot.className = `timeline-dot timeline-dot-${entry.category}`;
+			dot.title = `${new Date(entry.ts).toLocaleTimeString()} — ${entry.label}`;
+			dot.setAttribute("aria-label", entry.label);
+			// Hover preview: overlay the snapshot as the inactive-curve layer.
+			// Mouseleave restores the live render.
+			dot.addEventListener("mouseenter", () => {
+				const container = document.getElementById("eqContainer");
+				if (!container) return;
+				const session = getSession();
+				renderPEQ(
+					container,
+					getEqState(),
+					(index, key, value) => updateState(index, key, value),
+					{
+						inactiveBands: entry.eq,
+						onAddBand: addBandHandler,
+						onRemoveBand: removeBandHandler,
+						onDeleteBand: deleteBandHandler,
+						getBandCountCap: getBandCountCap,
+						// Preserve the active overlay settings so the ghost preview
+						// renders with the same decorations the user already has on.
+						showDelta: !!session.showDelta,
+						showPhase: !!session.showPhase,
+					},
+				);
+			});
+			dot.addEventListener("mouseleave", () => renderUI(getEqState()));
+			dot.addEventListener("click", (e) => {
+				if (e.shiftKey) {
+					snapshot();
+					restoreEvent(entry.id);
+					renderUI(getEqState());
+					updateGlobalGainUI(getGlobalGainState());
+					updateHistoryButtons();
+					const cfg = getActiveConfig();
+					if (cfg) persistProfile(cfg.key);
+					log(`Restored timeline entry: ${entry.label}`);
+				}
+			});
+			strip.appendChild(dot);
+		}
+	}
+
+	document.addEventListener("ddpec:timeline-change", render);
+	render();
 }
 
 // Log tray — click to expand / collapse, update caret. `log()` already
@@ -3384,3 +3677,113 @@ function registerDefaultCommands() {
 // Call once from initState so the palette has commands on first open.
 // Exported to make unit-level re-registration cheap in tests.
 export { registerDefaultCommands };
+
+// ----- Feature J: onboarding-as-demo -----------------------------------
+//
+// First-run gating. Returns true only when the user lands with no existing
+// target, measurement, or user preset — otherwise onboarding is a no-op.
+// Also respects the one-way firstRunComplete session flag.
+export function shouldShowFirstRunDemo(): boolean {
+	let hasUserPresets = false;
+	try {
+		const raw =
+			typeof localStorage !== "undefined"
+				? localStorage.getItem("ddpec.userPresets")
+				: null;
+		const userPresets = JSON.parse(raw || "[]");
+		hasUserPresets = Array.isArray(userPresets) && userPresets.length > 0;
+	} catch {
+		// Malformed storage — treat as empty.
+	}
+	return isFirstRunEligible({
+		firstRunComplete: getSession().firstRunComplete,
+		hasTarget: getTarget() !== null,
+		hasMeasurement: getMeasurement() !== null,
+		hasUserPresets,
+	});
+}
+
+function markFirstRunCompleteInternal(): void {
+	const session = getSession();
+	if (session.firstRunComplete) return;
+	saveSession({ firstRunComplete: true });
+	// Remove any pending pulse + tooltip on the AutoEQ button.
+	const btn = document.getElementById("btnAutoEq");
+	btn?.classList.remove("btn-pulse");
+	btn?.removeAttribute("data-onboarding-tip");
+}
+
+// Wire the implementation to the forward-declared slot so the preset /
+// AutoEQ call sites above can invoke it.
+markFirstRunCompleteImpl = markFirstRunCompleteInternal;
+
+// Synthesize a plausible "measurement" for the demo: mild wiggles on a
+// Harman-adjacent baseline so AutoEQ has something to fit. Using points
+// every octave from 20 Hz to 20 kHz keeps the interp clean.
+function sampleDemoMeasurement() {
+	return {
+		name: "Demo headphone (sample)",
+		points: [
+			{ freq: 20, db: 4.0 },
+			{ freq: 40, db: 3.0 },
+			{ freq: 80, db: 1.5 },
+			{ freq: 200, db: 0.5 },
+			{ freq: 500, db: -0.5 },
+			{ freq: 1000, db: 0.0 },
+			{ freq: 2000, db: 5.5 }, // peak — AutoEQ will notch this.
+			{ freq: 4000, db: 3.0 },
+			{ freq: 6000, db: -0.5 },
+			{ freq: 8000, db: -5.0 }, // dip — AutoEQ will boost this.
+			{ freq: 12000, db: -3.0 },
+			{ freq: 16000, db: -6.0 },
+			{ freq: 20000, db: -8.0 },
+		],
+	};
+}
+
+async function runFirstRunOnboarding(): Promise<void> {
+	if (!shouldShowFirstRunDemo()) return;
+
+	// Preload a sample measurement + Harman OE target. If the user rejects
+	// either (not a real possibility in the current flow) we bail; no need
+	// to half-load one side.
+	const harmanOe = TARGETS.find((t) => t.id === "harman-oe-2018");
+	if (!harmanOe) return;
+	setTarget(harmanOe.measurement);
+	setMeasurement(sampleDemoMeasurement());
+	renderUI(getEqState());
+	log(
+		"Welcome to DDPEC — I loaded a sample headphone + Harman target to get started.",
+	);
+
+	// Pulse the AutoEQ button for ~3 s so the user knows what to try.
+	const btn = document.getElementById("btnAutoEq") as HTMLButtonElement | null;
+	if (btn) {
+		btn.classList.add("btn-pulse");
+		btn.setAttribute(
+			"title",
+			"Try me — I'll fit the bands to match this headphone.",
+		);
+		const clearPulse = () => {
+			btn.classList.remove("btn-pulse");
+			btn.removeEventListener("click", clearPulse);
+		};
+		btn.addEventListener("click", clearPulse);
+		setTimeout(() => {
+			btn.classList.remove("btn-pulse");
+		}, 3000);
+	}
+
+	// Secondary nudge after 30 s if user still hasn't connected and the
+	// nudge hasn't already been shown this install.
+	const session = getSession();
+	if (!session.connectNudgeShown) {
+		setTimeout(() => {
+			if (getDevice()) return;
+			if (getSession().connectNudgeShown) return;
+			toast("Connect a CrinEar device to push EQ to hardware.", 4000);
+			log("Hint: click the top-bar Connect button to pair a CrinEar DAC.");
+			saveSession({ connectNudgeShown: true });
+		}, 30000);
+	}
+}

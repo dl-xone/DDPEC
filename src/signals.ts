@@ -1,10 +1,27 @@
 // Lightweight in-browser test-signal generator. Plays through the user's
 // default output so audio routed via the connected DAC gets the EQ applied.
 // No worklets — small buffered noise + OscillatorNode are plenty for audition.
+//
+// Feature F — reference audio library. Beyond the analytical test signals
+// (pink / white / sweep) the signals panel exposes a "Reference audio"
+// section: 500 Hz sine, the sweep, plus user-uploadable voice / music
+// slots. All of these route through a biquad chain derived from the
+// current EQ state so the user hears what the DAC will eventually hear.
+// Bundled media is deliberately avoided — the upload slots keep the
+// build lean and sidestep licensing.
+
+import type { Band } from "./main.ts";
+
+export type SignalType =
+	| "pink"
+	| "white"
+	| "sweep"
+	| "sine500"
+	| "file";
 
 let ctx: AudioContext | null = null;
 let activeSource:
-	| { stop: () => void; type: "pink" | "white" | "sweep" }
+	| { stop: () => void; type: SignalType }
 	| null = null;
 
 // Exported so other audio surfaces (spectrum.ts, abx.ts) reuse the same
@@ -47,8 +64,52 @@ function fillPinkNoise(buf: Float32Array) {
 }
 
 export interface SignalHandle {
-	type: "pink" | "white" | "sweep";
+	type: SignalType;
 	stop: () => void;
+}
+
+// Build a chain of Web Audio BiquadFilterNodes from the supplied bands.
+// Used by the reference-audio slots so the user hears the current EQ
+// applied to their source. Mirrors `abx.ts buildBiquadChain`; kept
+// separate so reference playback can evolve without touching ABX.
+function buildEqChain(bands: Band[]): BiquadFilterNode[] {
+	const audio = getContext();
+	const out: BiquadFilterNode[] = [];
+	for (const b of bands) {
+		if (!b.enabled) continue;
+		const node = audio.createBiquadFilter();
+		const typeMap: Record<string, BiquadFilterType> = {
+			PK: "peaking",
+			LSQ: "lowshelf",
+			HSQ: "highshelf",
+			HPQ: "highpass",
+			LPQ: "lowpass",
+			NO: "notch",
+			BPQ: "bandpass",
+		};
+		node.type = typeMap[b.type] ?? "peaking";
+		node.frequency.value = b.freq;
+		node.Q.value = b.q;
+		node.gain.value = b.gain;
+		out.push(node);
+	}
+	return out;
+}
+
+// Wire `source → chain → gain → destination`. Returns the last node so
+// callers that want to insert extra processing can chain further.
+function connectThroughChain(
+	source: AudioNode,
+	chain: BiquadFilterNode[],
+	gain: GainNode,
+): void {
+	let prev: AudioNode = source;
+	for (const node of chain) {
+		prev.connect(node);
+		prev = node;
+	}
+	prev.connect(gain);
+	gain.connect(getContext().destination);
 }
 
 export function stopSignal() {
@@ -194,4 +255,88 @@ export function isPlaying(): boolean {
 
 export function getPlayingType(): SignalHandle["type"] | null {
 	return activeSource?.type ?? null;
+}
+
+// ----- Feature F: reference playback --------------------------------
+
+export interface ReferenceOptions {
+	gainDb: number;
+	bands: Band[];
+}
+
+/**
+ * Feature F — steady 500 Hz sine for level-matching and quick gain checks.
+ * Routes through the current EQ's biquad chain so the user hears what
+ * would land on the DAC.
+ */
+export function playSine500(options: ReferenceOptions): SignalHandle {
+	stopSignal();
+	const audio = getContext();
+
+	const osc = audio.createOscillator();
+	osc.type = "sine";
+	osc.frequency.value = 500;
+
+	const chain = buildEqChain(options.bands);
+	const gain = audio.createGain();
+	gain.gain.value = 10 ** (options.gainDb / 20);
+
+	connectThroughChain(osc, chain, gain);
+	osc.start();
+
+	const handle: SignalHandle = {
+		type: "sine500",
+		stop: () => {
+			try {
+				osc.stop();
+			} catch {}
+			osc.disconnect();
+			for (const n of chain) n.disconnect();
+			gain.disconnect();
+		},
+	};
+	activeSource = handle;
+	return handle;
+}
+
+/**
+ * Feature F — play an arbitrary audio file (voice sample, music clip)
+ * through the current EQ chain. Decodes via `decodeAudioData` and loops.
+ * Callers supply both the File and the live band array so the played
+ * source reflects what the user is editing.
+ */
+export async function playReferenceFile(
+	file: File,
+	options: ReferenceOptions,
+): Promise<SignalHandle> {
+	stopSignal();
+	const audio = getContext();
+
+	const arr = await file.arrayBuffer();
+	const buf = await audio.decodeAudioData(arr.slice(0));
+
+	const src = audio.createBufferSource();
+	src.buffer = buf;
+	src.loop = true;
+
+	const chain = buildEqChain(options.bands);
+	const gain = audio.createGain();
+	gain.gain.value = 10 ** (options.gainDb / 20);
+
+	connectThroughChain(src, chain, gain);
+	src.start();
+
+	const handle: SignalHandle = {
+		type: "file",
+		stop: () => {
+			try {
+				src.stop();
+			} catch {}
+			src.disconnect();
+			for (const n of chain) n.disconnect();
+			gain.disconnect();
+		},
+	};
+	activeSource = handle;
+	return handle;
 }
