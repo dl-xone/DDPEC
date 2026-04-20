@@ -627,6 +627,45 @@ function renderPresetHeader() {
 	if (star) {
 		star.style.display = preset?.isUser ? "" : "none";
 	}
+
+	paintPresetActionPrimary();
+}
+
+// State-aware primary for the preset action bar:
+//   dirty + user preset      → Update Preset is primary, Save As New stays outline
+//   dirty + no user preset   → Save As New is primary, Update Preset hidden
+//   clean                    → both outline, Update Preset hidden (no-op anyway)
+// Only one filled button at a time; outline actions stay reachable.
+function paintPresetActionPrimary() {
+	const update = document.getElementById(
+		"btnUpdatePreset",
+	) as HTMLButtonElement | null;
+	const saveAs = document.getElementById(
+		"btnSaveAsNew",
+	) as HTMLButtonElement | null;
+	if (!update || !saveAs) return;
+
+	const dirty = hasAnyDirty();
+	const selectedId = getSession().selectedPresetId;
+	const isUserPreset =
+		!!selectedId && !!getAllPresets().find((p) => p.id === selectedId)?.isUser;
+
+	const setIntent = (btn: HTMLButtonElement, primary: boolean) => {
+		btn.classList.toggle("btn-primary", primary);
+		btn.classList.toggle("btn-outline", !primary);
+	};
+
+	if (dirty && isUserPreset) {
+		update.hidden = false;
+		setIntent(update, true);
+		setIntent(saveAs, false);
+	} else if (dirty && !isUserPreset) {
+		update.hidden = true;
+		setIntent(saveAs, true);
+	} else {
+		update.hidden = true;
+		setIntent(saveAs, false);
+	}
 }
 
 // `runSmartPrimary` lives in main.ts (the click handler branches on the
@@ -2946,6 +2985,23 @@ function openExportMenu(anchor: HTMLElement) {
 	menu.style.right = `${window.innerWidth - rect.right}px`;
 	menu.style.zIndex = "1000";
 
+	// Share link rides on top of the export list because "hand off the
+	// current EQ to another device" fits the same "I'm done tuning, send
+	// it somewhere" mental model as exporting a file.
+	const shareItem = document.createElement("button");
+	shareItem.type = "button";
+	shareItem.className = "export-menu-item";
+	shareItem.textContent = "Share link";
+	shareItem.addEventListener("click", () => {
+		menu.remove();
+		shareCurrentEqLink();
+	});
+	menu.appendChild(shareItem);
+
+	const divider = document.createElement("div");
+	divider.className = "export-menu-divider";
+	menu.appendChild(divider);
+
 	const formats: ExportFormat[] = [
 		"json",
 		"rew",
@@ -3897,6 +3953,14 @@ function registerDefaultCommands() {
 			run: () => {
 				const input = document.getElementById("fileInput") as HTMLInputElement | null;
 				input?.click();
+			},
+		},
+		{
+			id: "export.share-link",
+			title: "Copy share link",
+			keywords: ["get", "link", "url", "share", "hand off"],
+			run: () => {
+				void shareCurrentEqLink();
 			},
 		},
 		{

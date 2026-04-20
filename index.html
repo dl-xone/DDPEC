@@ -73,15 +73,11 @@
   <div class="flex items-center gap-2.5">
     <span id="presetChangedChip" class="chip-pending" hidden>Preset changed</span>
     <button type="button" id="btnAutoEq" class="btn-outline" disabled title="Load a target AND a measurement to enable AutoEQ">AutoEQ</button>
-    <button type="button" id="btnUpdatePreset" class="btn-outline">Update Preset</button>
+    <button type="button" id="btnUpdatePreset" class="btn-outline" hidden>Update Preset</button>
     <button type="button" id="btnSaveAsNew" class="btn-outline">Save As New Preset</button>
-    <button type="button" id="btnGetLink" class="btn-outline">
-      Get link
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-    </button>
     <div class="export-split">
       <button type="button" id="btnExport" class="btn-outline" title="Export">Export</button>
-      <button type="button" id="btnExportMenu" class="btn-outline export-arrow" title="Choose export format" aria-label="Choose export format" aria-haspopup="menu">
+      <button type="button" id="btnExportMenu" class="btn-outline export-arrow" title="Export format or share link" aria-label="Export format or share link" aria-haspopup="menu">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
     </div>
