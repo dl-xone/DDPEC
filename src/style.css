@@ -1067,3 +1067,45 @@ body[data-alt-hold="1"] .kbd-chip {
 		opacity: 0.6;
 	}
 }
+
+/* Tier 3 #2 — AutoEQ celebration halo. Triggered by a one-shot class add
+   on #eqContainer after a well-fit AutoEQ pass (MSE < 1 dB²). The ring
+   sits above the canvas via ::after, scales from 1.0 → 1.04, fades from
+   0.6 → 0 over 600 ms, then removes itself. No layout impact (position is
+   absolute against a relative parent). */
+#eqContainer {
+	position: relative;
+}
+#eqContainer.celebrate::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	border: 2px solid var(--color-accent);
+	border-radius: 6px;
+	animation: eq-celebrate 600ms ease-out forwards;
+}
+@keyframes eq-celebrate {
+	0% {
+		opacity: 0.6;
+		transform: scale(1);
+	}
+	100% {
+		opacity: 0;
+		transform: scale(1.04);
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	#eqContainer.celebrate::after {
+		animation: none;
+		opacity: 0;
+	}
+}
+
+/* Tier 3 #4 — focus ring on the canvas when it receives keyboard focus.
+   Canvas has `tabindex="0"` for keyboard-driven band editing; a visible
+   outline tells the user they can arrow-edit the selected band. */
+#eqCanvas:focus-visible {
+	outline: 2px solid var(--color-accent);
+	outline-offset: -2px;
+}

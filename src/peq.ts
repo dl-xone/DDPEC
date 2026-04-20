@@ -10,6 +10,8 @@ import { measurementDbAt, targetDbAt } from "./measurements.ts";
 import peqTemplate from "./peq.template.html?raw";
 import { isSpectrumActive, readSpectrum } from "./spectrum.ts";
 import { getLoadedPresetSnapshot, isBandChangedVsPreset, isEqEnabled } from "./state.ts";
+import { haptic } from "./haptic.ts";
+import { evaluateNumericInput } from "./numericInput.ts";
 
 /**
  * CONFIG & CONSTANTS
@@ -83,6 +85,10 @@ let dragStartX = 0;
 let dragStartY = 0;
 let dragStartQ = 1;
 let dragMoved = false;
+// Tier 3 #1 — track the sign of the dragging band's gain across frames.
+// When the sign flips (user drags through 0 dB) we buzz once. Null until
+// first mousemove writes a gain on this drag.
+let dragPrevGainSign: number | null = null;
 // Modifier keys captured at mousedown (for click-time decisions) and
 // refreshed on each mousemove via the event's live `altKey` / `shiftKey`
 // (so a user can press/release modifiers mid-drag to switch modes).
@@ -833,7 +839,11 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 			// Gainless types ignore the input (it's disabled anyway, but
 			// a programmatic .value change shouldn't bleed into state).
 			if (!typeHasGain(inp.dataset.bandType ?? "PK")) return;
-			const v = Number(inp.value);
+			// Tier 3 #8 — arithmetic formulas (`3+2`) evaluate inline;
+			// fall through to the plain Number parse if the formula parser
+			// rejects the input (e.g. user is mid-typing "3+").
+			const formula = evaluateNumericInput(inp.value);
+			const v = formula ?? Number(inp.value);
 			if (Number.isFinite(v)) {
 				onUpdateCallback?.(originalIndex, "gain", v);
 				draw();
@@ -855,7 +865,9 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 	view.forEach(({ band, originalIndex }, sortedPos) => {
 		const inp = numericInput(String(Math.round(band.freq)), 10, 24000, 1);
 		inp.addEventListener("input", () => {
-			const v = Number(inp.value);
+			// Tier 3 #8 — formula support.
+			const formula = evaluateNumericInput(inp.value);
+			const v = formula ?? Number(inp.value);
 			if (Number.isFinite(v) && v > 0) {
 				onUpdateCallback?.(originalIndex, "freq", v);
 				draw();
@@ -882,7 +894,9 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 	view.forEach(({ band, originalIndex }, sortedPos) => {
 		const inp = numericInput(formatQ(band.q), 0.1, 10, 0.01);
 		inp.addEventListener("input", () => {
-			const v = Number(inp.value);
+			// Tier 3 #8 — formula support.
+			const formula = evaluateNumericInput(inp.value);
+			const v = formula ?? Number(inp.value);
 			if (Number.isFinite(v) && v > 0) {
 				onUpdateCallback?.(originalIndex, "q", v);
 				draw();
@@ -1328,7 +1342,98 @@ function exitSolo() {
 	prevSoloEnabled = null;
 }
 
+// Tier 3 #4 — keyboard-only band editing. Clamps match the canvas-drag
+// and tabular-input bounds so mouse + keyboard + numeric entry all land
+// in the same value window.
+const KB_FREQ_MIN = 20;
+const KB_FREQ_MAX = 20000;
+const KB_GAIN_MIN = -20;
+const KB_GAIN_MAX = 20;
+const KB_Q_MIN = 0.1;
+const KB_Q_MAX = 10;
+
 function wireCanvasInteraction(el: HTMLCanvasElement) {
+	// Tier 3 #4 — canvas-focused keydown. Arrow keys edit the currently
+	// selected band; Tab cycles selection (ascending-freq order); Esc
+	// deselects. Edits clamp and flow through the existing handleUpdate
+	// path so history + persistence behave exactly like a mouse drag.
+	el.addEventListener("keydown", (e) => {
+		// Tab with no modifier cycles selection forward; Shift+Tab reverses.
+		// Either case is a no-op when there are no bands.
+		if (e.key === "Tab" && localBands.length > 0) {
+			e.preventDefault();
+			const view = sortedView(localBands);
+			let idx = view.findIndex((v) => v.band.index === selectedIndex);
+			if (e.shiftKey) {
+				idx = idx < 0 ? view.length - 1 : (idx - 1 + view.length) % view.length;
+			} else {
+				idx = idx < 0 ? 0 : (idx + 1) % view.length;
+			}
+			selectBand(view[idx].band.index);
+			return;
+		}
+		if (e.key === "Escape") {
+			if (selectedIndex === null) return;
+			selectedIndex = null;
+			syncBandTable(localBands);
+			draw();
+			return;
+		}
+		// All remaining keys require a current selection.
+		if (selectedIndex === null) return;
+		const arrayIdx = localBands.findIndex((b) => b.index === selectedIndex);
+		if (arrayIdx < 0) return;
+		const band = localBands[arrayIdx];
+
+		const key = e.key;
+		if (
+			key !== "ArrowLeft" &&
+			key !== "ArrowRight" &&
+			key !== "ArrowUp" &&
+			key !== "ArrowDown"
+		) {
+			return;
+		}
+		e.preventDefault();
+
+		// Alt + Up/Down → Q edit. Shift narrows the step for fine tuning.
+		if (e.altKey && (key === "ArrowUp" || key === "ArrowDown")) {
+			const step = e.shiftKey ? 0.02 : 0.1;
+			const direction = key === "ArrowUp" ? 1 : -1;
+			const next = Math.max(
+				KB_Q_MIN,
+				Math.min(KB_Q_MAX, band.q + direction * step),
+			);
+			handleUpdate(arrayIdx, "q", Math.round(next * 100) / 100);
+			return;
+		}
+		// Left/Right → freq. Log step so one keystroke feels the same
+		// distance in pixel-space at 80 Hz as it does at 8 kHz. Shift = 10%.
+		if (key === "ArrowLeft" || key === "ArrowRight") {
+			const factor = e.shiftKey ? 1.1 : 1.02;
+			const direction = key === "ArrowRight" ? factor : 1 / factor;
+			const next = Math.max(
+				KB_FREQ_MIN,
+				Math.min(KB_FREQ_MAX, band.freq * direction),
+			);
+			handleUpdate(arrayIdx, "freq", Math.round(next));
+			return;
+		}
+		// Up/Down → gain. 0.5 dB coarse, 0.1 dB fine. Skip for gainless
+		// types so the arrow doesn't log a write that computeBiquad ignores.
+		if (key === "ArrowUp" || key === "ArrowDown") {
+			if (!typeHasGain(band.type)) return;
+			const step = e.shiftKey ? 0.1 : 0.5;
+			const direction = key === "ArrowUp" ? 1 : -1;
+			const next = Math.max(
+				KB_GAIN_MIN,
+				Math.min(KB_GAIN_MAX, band.gain + direction * step),
+			);
+			handleUpdate(arrayIdx, "gain", Math.round(next * 100) / 100);
+			return;
+		}
+	});
+
 	el.addEventListener("mousedown", (e) => {
 		const rect = el.getBoundingClientRect();
 		const scaleX = (el as any).logicalWidth / rect.width;
@@ -1357,6 +1462,8 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 		if (closestArrayIdx !== -1) {
 			draggingIndex = closestArrayIdx;
 			selectBand(localBands[closestArrayIdx].index);
+			// Tier 3 #4 — grab focus so the user can immediately arrow-edit.
+			el.focus({ preventScroll: true });
 			// Capture drag start state for click-vs-drag + shift-drag Q work.
 			dragStartX = e.clientX;
 			dragStartY = e.clientY;
@@ -1364,6 +1471,9 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 			dragMoved = false;
 			dragAltAtStart = e.altKey;
 			dragShiftAtStart = e.shiftKey;
+			// Seed the zero-cross tracker with the dragging band's current sign.
+			const startGain = localBands[closestArrayIdx].gain;
+			dragPrevGainSign = startGain === 0 ? 0 : startGain > 0 ? 1 : -1;
 		}
 	});
 
@@ -1459,6 +1569,20 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 		// ignored by computeBiquad — stays cleaner in history.
 		const band = localBands[draggingIndex];
 		if (band && typeHasGain(band.type)) {
+			// Tier 3 #1 — zero-crossing haptic. Sign transitions (positive↔
+			// negative) during a drag get a tiny buzz so the 0 dB line
+			// feels like a detent. Exactly-zero gains count as "crossed"
+			// by convention (sign = 0 resolves toward the next nonzero).
+			const newSign = gain === 0 ? 0 : gain > 0 ? 1 : -1;
+			if (
+				dragPrevGainSign !== null &&
+				dragPrevGainSign !== 0 &&
+				newSign !== 0 &&
+				dragPrevGainSign !== newSign
+			) {
+				haptic(4);
+			}
+			dragPrevGainSign = newSign;
 			handleUpdate(draggingIndex, "gain", gain);
 		}
 		// handleUpdate already triggers a draw — capture flags above are
@@ -1472,6 +1596,8 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 		// Feature E — snap ticks only show during an active drag.
 		capturedFreqSnap = null;
 		capturedGainSnap = null;
+		// Tier 3 #1 — reset the zero-cross tracker for the next drag.
+		dragPrevGainSign = null;
 
 		// If the pointer never moved past threshold, this was a click —
 		// dispatch modifier-click actions. Regular clicks fall through to

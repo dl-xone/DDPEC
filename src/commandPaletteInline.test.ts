@@ -91,6 +91,27 @@ describe("parseInlineEdit", () => {
 		expect(parseInlineEdit("preamp")).toBeNull();
 		expect(parseInlineEdit("preamp -4 extra")).toBeNull();
 	});
+
+	it("parses `reduce to N` for Tier 3 #5", () => {
+		expect(parseInlineEdit("reduce to 6")).toEqual({
+			kind: "reduce",
+			bandIdx: 0,
+			value: 6,
+		});
+		expect(parseInlineEdit("reduce 4")).toEqual({
+			kind: "reduce",
+			bandIdx: 0,
+			value: 4,
+		});
+	});
+
+	it("rejects reduce with non-positive / non-integer N", () => {
+		expect(parseInlineEdit("reduce to 0")).toBeNull();
+		expect(parseInlineEdit("reduce to -3")).toBeNull();
+		expect(parseInlineEdit("reduce to 3.5")).toBeNull();
+		expect(parseInlineEdit("reduce to")).toBeNull();
+		expect(parseInlineEdit("reduce to 3 extra")).toBeNull();
+	});
 });
 
 describe("describeInlineEdit", () => {
@@ -110,5 +131,11 @@ describe("describeInlineEdit", () => {
 		expect(
 			describeInlineEdit({ kind: "preamp", bandIdx: 0, value: -4 }),
 		).toBe("Set pre-amp to -4 dB");
+		expect(
+			describeInlineEdit({ kind: "reduce", bandIdx: 0, value: 6 }),
+		).toBe("Reduce to 6 bands");
+		expect(
+			describeInlineEdit({ kind: "reduce", bandIdx: 0, value: 1 }),
+		).toBe("Reduce to 1 band");
 	});
 });

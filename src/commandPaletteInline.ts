@@ -16,13 +16,19 @@
 // assumption: the displayed band number IS `band.index + 1` in the
 // current UI.
 
-export type InlineEditKind = "gain" | "freq" | "q" | "type" | "preamp";
+export type InlineEditKind =
+	| "gain"
+	| "freq"
+	| "q"
+	| "type"
+	| "preamp"
+	| "reduce";
 
 export interface InlineEdit {
 	kind: InlineEditKind;
-	// bandIdx is 1-indexed; ignored for `preamp`.
+	// bandIdx is 1-indexed; ignored for `preamp` and `reduce`.
 	bandIdx: number;
-	// Numeric value for gain/freq/q/preamp; string for type.
+	// Numeric value for gain/freq/q/preamp/reduce; string for type.
 	value: number | string;
 }
 
@@ -70,6 +76,20 @@ export function parseInlineEdit(query: string): InlineEdit | null {
 	// Collapse whitespace for simple tokenization.
 	const tokens = trimmed.split(/\s+/);
 	const head = tokens[0].toLowerCase();
+
+	// Tier 3 #5 — `reduce to <N>` collapses the slot to N bands. N must be
+	// a positive integer; value bounds aren't known at parse time (they
+	// depend on the current slot size) so we only check "≥ 1" here.
+	if (head === "reduce") {
+		// Accept either "reduce to <N>" or "reduce <N>".
+		const rest = tokens.slice(1);
+		const nToken = rest[0] === "to" ? rest[1] : rest[0];
+		if (!nToken || (rest[0] === "to" && rest.length !== 2) || (rest[0] !== "to" && rest.length !== 1))
+			return null;
+		const n = parseNumber(nToken);
+		if (n === null || !Number.isInteger(n) || n < 1) return null;
+		return { kind: "reduce", bandIdx: 0, value: n };
+	}
 
 	if (head === "preamp") {
 		if (tokens.length !== 2) return null;
@@ -122,5 +142,7 @@ export function describeInlineEdit(edit: InlineEdit): string {
 			return `Set band ${edit.bandIdx} type to ${edit.value}`;
 		case "preamp":
 			return `Set pre-amp to ${edit.value} dB`;
+		case "reduce":
+			return `Reduce to ${edit.value} band${edit.value === 1 ? "" : "s"}`;
 	}
 }

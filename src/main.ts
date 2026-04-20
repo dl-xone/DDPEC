@@ -60,7 +60,16 @@ async function callFnHandler(name: string, fallbackMessage: string) {
  */
 document
 	.getElementById("btnConnect")
-	?.addEventListener("click", async () => toggleConnection());
+	?.addEventListener("click", async () => {
+		// Tier 3 #3 — branch on the current primary-action state set by
+		// paintSmartPrimary. The dataset attribute is the source of truth
+		// so the button's visible label matches the action that fires.
+		const btn = document.getElementById("btnConnect") as HTMLButtonElement | null;
+		const action = btn?.dataset.primaryAction ?? "connect";
+		if (action === "sync") await handleSyncClick();
+		else if (action === "flash") await handleFlashClick();
+		else await toggleConnection();
+	});
 
 /**
  * SYNC LOGIC — wrapper adds progress modal + inert guard + errorModal.

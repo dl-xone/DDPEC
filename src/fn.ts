@@ -144,6 +144,70 @@ export { openPalette } from "./commandPalette.ts";
 import { morphToBands } from "./morph.ts";
 import { initShortcutOverlay, registerShortcut } from "./shortcutOverlay.ts";
 import { getTimeline, recordEvent, restoreEvent } from "./sessionTimeline.ts";
+import { haptic } from "./haptic.ts";
+import { reduceToNBands } from "./reduceBands.ts";
+import { evaluateNumericInput } from "./numericInput.ts";
+
+// Tier 3 #7 / #9 — ghost-overlay preview state. When set, renderUI swaps
+// the inactive-slot overlay for these bands so the user can "try on" a
+// preset (hover) or "compare against" a preset (Shift-click) without
+// mutating the active slot. Both #7 and #9 flow through the same state;
+// #9 (pinned) overrides #7 (hover) when active.
+let hoverPreviewBands: Band[] | null = null;
+let pinnedPreviewBands: Band[] | null = null;
+
+function getPreviewBands(): Band[] | null {
+	return pinnedPreviewBands ?? hoverPreviewBands;
+}
+
+// Resolve a preset id to the bands that _would_ be installed if the user
+// clicked it. Uses the same conversion as applyPresetFromSidebar so the
+// ghost line matches exactly what a click would do. Returns null for
+// unknown ids.
+function resolvePresetBands(id: string): Band[] | null {
+	const preset = getAllPresets().find((p) => p.id === id);
+	if (!preset) return null;
+	const cfg = getActiveConfig();
+	const maxFilters = cfg?.maxFilters ?? DEFAULT_FREQS.length;
+	const defaultFreqs = cfg?.defaultFreqs ?? DEFAULT_FREQS;
+	return applyPreset(preset, maxFilters, defaultFreqs);
+}
+
+function setHoverPreview(presetId: string | null) {
+	if (presetId === null) {
+		if (hoverPreviewBands === null) return;
+		hoverPreviewBands = null;
+	} else {
+		hoverPreviewBands = resolvePresetBands(presetId);
+	}
+	renderUI(getEqState());
+}
+
+function setPinnedPreview(presetId: string | null) {
+	if (presetId === null) {
+		if (pinnedPreviewBands === null) return;
+		pinnedPreviewBands = null;
+	} else {
+		pinnedPreviewBands = resolvePresetBands(presetId);
+	}
+	renderUI(getEqState());
+}
+
+// Global Shift-release cleanup for Tier 3 #9 — when the user lets go of
+// Shift without clicking again, clear any pinned preview. Attached once
+// at initState time.
+function wirePreviewShiftRelease() {
+	window.addEventListener("keyup", (e) => {
+		if (e.key === "Shift" && pinnedPreviewBands !== null) {
+			setPinnedPreview(null);
+		}
+	});
+	// Defensive: if the window loses focus mid-hold, drop the preview so
+	// the user doesn't come back to a stuck ghost line.
+	window.addEventListener("blur", () => {
+		if (pinnedPreviewBands !== null) setPinnedPreview(null);
+	});
+}
 
 // Feature J — marker function lives further down in this file. Forward
 // reference so the preset / AutoEQ call sites above can call through it.
@@ -261,6 +325,18 @@ export function initState() {
 	wireExportMenu();
 	registerDefaultCommands();
 
+	// Tier 3 #9 — clear Shift-pinned preset preview when Shift is released.
+	wirePreviewShiftRelease();
+
+	// Tier 3 #3 — repaint the smart primary button whenever dirty flips,
+	// which is the most common trigger for label rotation. Connect/disconnect
+	// already route through applyConnectionUI.
+	document.addEventListener("ddpec:dirty-change", () => paintSmartPrimary());
+	paintSmartPrimary();
+	// Tier 3 #6 — preset breadcrumb follows dirty state too.
+	document.addEventListener("ddpec:dirty-change", () => renderPresetHeader());
+	renderPresetHeader();
+
 	// Feature B — Alt-hold shortcut overlay. Listeners attach once; chip
 	// elements inject lazily on first Alt hold so dynamically-rendered
 	// targets (e.g. preset bar) are present by then.
@@ -296,6 +372,11 @@ export function initState() {
 // the tabular editor's setBandField path so persistence + history stay
 // consistent; no new dirty-flip semantics introduced.
 async function applyInlineEdit(edit: InlineEdit): Promise<void> {
+	if (edit.kind === "reduce") {
+		// Tier 3 #5 — palette entry: reduce to N via the pure helper.
+		await handleReduceToN(edit.value as number);
+		return;
+	}
 	if (edit.kind === "preamp") {
 		snapshot();
 		setGlobalGainState(edit.value as number);
@@ -439,24 +520,118 @@ function applyConnectionUI(label: string | null) {
 	const statusBadge = document.getElementById("statusBadge");
 	const statusText = document.getElementById("statusText");
 	const deviceName = document.getElementById("deviceName");
-	const btnConnect = document.getElementById("btnConnect");
 
 	if (label) {
 		statusBadge?.classList.remove("disconnected");
 		statusBadge?.classList.add("connected");
 		if (statusText) statusText.textContent = "Connected";
 		if (deviceName) deviceName.textContent = label;
-		if (btnConnect) btnConnect.textContent = "Disconnect";
 		setAppOffline(false);
 	} else {
 		statusBadge?.classList.remove("connected");
 		statusBadge?.classList.add("disconnected");
 		if (statusText) statusText.textContent = "Disconnected";
 		if (deviceName) deviceName.textContent = "";
-		if (btnConnect) btnConnect.textContent = "Connect";
 		setAppOffline(true);
 	}
+	// Tier 3 #3 — the smart-primary button's label + action depend on
+	// connection state AND dirty state; funnel both through the same
+	// painter so the button never lags behind reality.
+	paintSmartPrimary();
+	// Tier 3 #6 — breadcrumb: device-name is part of the preset header.
+	renderPresetHeader();
 }
+
+// Tier 3 #3 — smart primary action button. `#btnConnect` rotates between
+// three states:
+//   - disconnected  → "Connect"      → toggleConnection()
+//   - connected dirty → "Sync to RAM" → handleSyncClick()
+//   - connected clean → "Save to flash" → handleFlashClick()
+//
+// The secondary commit bar with the explicit Sync + Flash buttons stays
+// visible so power users keep the granular controls. This button is an
+// additive, speed-oriented surface that always reflects the next useful
+// action — no hunting for the right button.
+type SmartPrimaryAction = "connect" | "sync" | "flash";
+
+function computeSmartPrimaryAction(): SmartPrimaryAction {
+	if (!getDevice()) return "connect";
+	if (hasAnyDirty()) return "sync";
+	return "flash";
+}
+
+function paintSmartPrimary() {
+	const btn = document.getElementById("btnConnect") as HTMLButtonElement | null;
+	if (!btn) return;
+	const action = computeSmartPrimaryAction();
+	switch (action) {
+		case "connect":
+			btn.textContent = "Connect";
+			btn.title = "Connect a CrinEar DAC";
+			break;
+		case "sync":
+			btn.textContent = "Sync to RAM";
+			btn.title = "Push pending EQ changes to device RAM";
+			break;
+		case "flash":
+			btn.textContent = "Save to flash";
+			btn.title = "Persist current EQ to device flash memory";
+			break;
+	}
+	btn.dataset.primaryAction = action;
+}
+
+// Tier 3 #6 — preset breadcrumb. Repaints `#presetName` as
+// `{device} → {preset}` (or just `{preset}` if no device is connected),
+// with a trailing `(modified)` marker in italic grey when any slot is
+// dirty. Called from applyConnectionUI, ddpec:dirty-change, and after
+// every preset mutation (apply / save / update / delete / reset).
+function renderPresetHeader() {
+	const el = document.getElementById("presetName");
+	if (!el) return;
+	const selectedId = getSession().selectedPresetId;
+	const preset = selectedId
+		? getAllPresets().find((p) => p.id === selectedId)
+		: null;
+	const presetName = preset?.name ?? "Custom EQ";
+
+	const cfg = getActiveConfig();
+	const deviceLabel = cfg?.label ?? null;
+
+	// Rebuild via DOM methods so the italic "modified" suffix stays styled
+	// without dropping in raw HTML.
+	el.replaceChildren();
+	if (deviceLabel) {
+		const dev = document.createElement("span");
+		dev.textContent = deviceLabel;
+		dev.className = "text-text-2";
+		el.appendChild(dev);
+		const sep = document.createElement("span");
+		sep.textContent = " \u2192 ";
+		sep.className = "text-text-3";
+		el.appendChild(sep);
+	}
+	const nameSpan = document.createElement("span");
+	nameSpan.textContent = presetName;
+	el.appendChild(nameSpan);
+	if (hasAnyDirty()) {
+		const mod = document.createElement("span");
+		mod.textContent = " (modified)";
+		mod.className = "italic text-text-3 font-normal";
+		el.appendChild(mod);
+	}
+
+	// Keep the yellow star visible only for user presets, matching the
+	// sidebar convention. Hide entirely when no preset is selected.
+	const star = document.getElementById("presetStar");
+	if (star) {
+		star.style.display = preset?.isUser ? "" : "none";
+	}
+}
+
+// `runSmartPrimary` lives in main.ts (the click handler branches on the
+// button's `dataset.primaryAction` there) so this module doesn't need a
+// dispatcher export.
 
 // Flip just the status word — used for transient "Syncing…" / "Writing…"
 // states without touching the badge class or deviceName label.
@@ -547,6 +722,10 @@ export function renderUI(eqState: EQ) {
 	// suppresses the inactive curve entirely (no ghost line, no delta).
 	const session = getSession();
 	const overlayHidden = session.abOverlay === "hidden";
+	// Tier 3 #7 / #9 — preview (hover or Shift-pinned) wins over the
+	// normal inactive slot overlay, so the ghost line is always the
+	// preset the user is "trying on". Cleared on mouseleave / Shift up.
+	const preview = getPreviewBands();
 	renderPEQ(
 		container,
 		eqState,
@@ -554,7 +733,7 @@ export function renderUI(eqState: EQ) {
 			updateState(index, key, value);
 		},
 		{
-			inactiveBands: overlayHidden ? null : getInactiveEq(),
+			inactiveBands: preview ?? (overlayHidden ? null : getInactiveEq()),
 			onAddBand: addBandHandler,
 			onRemoveBand: removeBandHandler,
 			onDeleteBand: deleteBandHandler,
@@ -747,7 +926,20 @@ export function renderPresetSidebar(filter = "") {
 		desc.textContent = preset.description;
 		col.append(name, desc);
 		row.appendChild(col);
-		row.addEventListener("click", () => applyPresetFromSidebar(preset.id));
+		// Tier 3 #9 — Shift-click: pin as ghost overlay instead of applying.
+		// Release Shift clears the preview (wirePreviewShiftRelease).
+		row.addEventListener("click", (e) => {
+			if (e.shiftKey) {
+				setPinnedPreview(preset.id);
+				return;
+			}
+			applyPresetFromSidebar(preset.id);
+		});
+		// Tier 3 #7 — hover preview. Mouseenter ghosts the preset's bands
+		// on the canvas; mouseleave clears (unless a pin is in effect —
+		// pinned overrides hover via getPreviewBands).
+		row.addEventListener("mouseenter", () => setHoverPreview(preset.id));
+		row.addEventListener("mouseleave", () => setHoverPreview(null));
 		list.appendChild(row);
 		shown++;
 	}
@@ -810,6 +1002,7 @@ export async function applyPresetFromSidebar(id: string) {
 					"",
 			);
 			renderUI(getEqState());
+			renderPresetHeader();
 			updateHistoryButtons();
 			if (cfg) persistProfile(cfg.key);
 			log(
@@ -853,6 +1046,8 @@ export async function activateSlot(slot: SlotName) {
 		if (!ok) return;
 	}
 	snapshot();
+	// Tier 3 #1 — tactile tick on slot change.
+	haptic(8);
 
 	// Capture the visually-current bands before the pointer moves.
 	const fromBands = structuredClone(getEqState());
@@ -887,6 +1082,8 @@ export async function activateSlot(slot: SlotName) {
 
 export function swapABSlots() {
 	snapshot();
+	// Tier 3 #1 — tactile tick on slot swap.
+	haptic(8);
 	// Feature G — cross-fade the swap too. After `swapSlots()` the active
 	// pointer still refers to the same letter, but the contents flipped.
 	// Capture pre-swap bands, perform the logical swap, read post-swap
@@ -1989,6 +2186,12 @@ export function initSession() {
 		}
 	}
 
+	// Tier 3 #6 — repaint the preset breadcrumb now that session restore
+	// has (possibly) set selectedPresetId. initState's initial call runs
+	// before this, so without this second paint the header shows "Custom
+	// EQ" until the first dirty-change.
+	renderPresetHeader();
+
 	// Kick off auto-reconnect — fire-and-forget; any failure is silent.
 	void autoReconnectDevice();
 }
@@ -2014,6 +2217,7 @@ export async function resetToDefaults() {
 				// loads one.
 				setLoadedPresetSnapshot(null);
 				renderUI(getEqState());
+				renderPresetHeader();
 				updateHistoryButtons();
 				resolve();
 			},
@@ -2195,6 +2399,7 @@ export function handleSaveAsNew() {
 			"",
 	);
 	renderUI(getEqState());
+	renderPresetHeader();
 	toast(`Preset saved: ${preset.name}`);
 	log(`Saved preset "${preset.name}".`);
 }
@@ -2219,6 +2424,7 @@ export function handleUpdatePreset() {
 			"",
 	);
 	renderUI(getEqState());
+	renderPresetHeader();
 	toast(`Updated: ${updated.name}`);
 	log(`Updated preset "${updated.name}".`);
 }
@@ -2239,6 +2445,7 @@ export function handleDeletePreset() {
 		(document.getElementById("presetSearch") as HTMLInputElement | null)?.value ??
 			"",
 	);
+	renderPresetHeader();
 	toast("Preset deleted");
 	log("Deleted user preset.");
 }
@@ -2904,6 +3111,32 @@ export async function handleAutoEq() {
 		}
 	}
 
+	// Tier 3 #1 — AutoEQ completion haptic (a beat longer than slot swap
+	// so the distinct "something bigger finished" feedback reads).
+	haptic(12);
+
+	// Tier 3 #2 — celebration halo on a well-fit result. 1 dB² MSE is a
+	// rough "that landed" threshold; below that, we toggle a CSS class on
+	// #eqContainer so the keyframe pulse fires once. Reduced-motion is
+	// honored via the stylesheet's media query override and a JS guard so
+	// the class doesn't even get added on opted-out machines.
+	if (after < 1.0) {
+		const reduced =
+			typeof matchMedia === "function" &&
+			matchMedia("(prefers-reduced-motion: reduce)").matches;
+		if (!reduced) {
+			const eqc = document.getElementById("eqContainer");
+			if (eqc) {
+				eqc.classList.remove("celebrate");
+				// Force reflow so removing+adding in quick succession still
+				// re-triggers the keyframe animation.
+				void eqc.offsetWidth;
+				eqc.classList.add("celebrate");
+				setTimeout(() => eqc.classList.remove("celebrate"), 650);
+			}
+		}
+	}
+
 	toast(
 		`AutoEQ fit complete (${newBands.length} band${newBands.length === 1 ? "" : "s"}, MSE ${before.toFixed(2)} → ${after.toFixed(2)} dB²)`,
 	);
@@ -2915,6 +3148,55 @@ export async function handleAutoEq() {
 	);
 	// Feature J — AutoEQ click is the canonical first-run completion gate.
 	markFirstRunComplete();
+}
+
+// Tier 3 #5 — "Reduce to N bands" command. Snapshots for undo, drops the
+// lowest-impact bands via `reduceToNBands`, applies via setEqState, and
+// toasts the dropped band list. Prompts the user for N when called
+// without an argument (default entry point from registerDefaultCommands).
+export async function handleReduceToN(n?: number): Promise<void> {
+	const current = getEqState();
+	if (current.length === 0) {
+		toast("No bands to reduce");
+		return;
+	}
+	let target = n;
+	if (target === undefined) {
+		const raw = window.prompt(
+			`Reduce to how many bands? (current: ${current.length})`,
+			String(Math.max(1, current.length - 1)),
+		);
+		if (raw === null) return;
+		const parsed = Number.parseInt(raw, 10);
+		if (!Number.isFinite(parsed) || parsed < 1) {
+			toast("Invalid band count");
+			return;
+		}
+		target = parsed;
+	}
+	if (target >= current.length) {
+		toast(`Already at ${current.length} band${current.length === 1 ? "" : "s"}`);
+		return;
+	}
+	const { reduced, dropped } = reduceToNBands(current, target);
+	snapshot();
+	setEqState(reduced);
+	renderUI(getEqState());
+	updateHistoryButtons();
+	const cfg = getActiveConfig();
+	if (cfg) persistProfile(cfg.key);
+	const droppedDesc = dropped
+		.map((b) => `${Math.round(b.freq)} Hz`)
+		.slice(0, 3)
+		.join(", ");
+	const suffix = dropped.length > 3 ? `, +${dropped.length - 3} more` : "";
+	toast(`Reduced to ${reduced.length} bands (dropped ${droppedDesc}${suffix})`);
+	log(
+		`Reduced slot to ${reduced.length} bands (dropped ${dropped.length}: ${dropped
+			.map((b) => `${Math.round(b.freq)} Hz`)
+			.join(", ")}).`,
+	);
+	recordEvent(`Reduced to ${reduced.length} bands`);
 }
 
 function wireEqDisable() {
@@ -3067,7 +3349,9 @@ function wireBottomPanelTabs() {
 			if (cfg) persistProfile(cfg.key);
 		};
 		value.addEventListener("input", () => {
-			const v = Number(value.value);
+			// Tier 3 #8 — formula support in the preamp value cell.
+			const formula = evaluateNumericInput(value.value);
+			const v = formula ?? Number(value.value);
 			if (Number.isFinite(v)) push(v);
 		});
 		slider.addEventListener("input", () => {
@@ -3642,6 +3926,12 @@ function registerDefaultCommands() {
 			title: "Reset to defaults",
 			keywords: ["factory", "clear"],
 			run: () => resetToDefaults(),
+		},
+		{
+			id: "bands.reduce",
+			title: "Reduce to N bands\u2026",
+			keywords: ["simplify", "fewer", "drop", "consolidate"],
+			run: () => handleReduceToN(),
 		},
 		{
 			id: "help.keyboard",
