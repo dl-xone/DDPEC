@@ -10,6 +10,8 @@
 
 <body class="font-sans bg-surface-0 text-text-1 m-0 p-0 flex flex-col h-screen overflow-hidden">
 
+<a href="#eqContainer" class="skip-link">Skip to EQ canvas</a>
+
 <!-- Top bar — brand + status pill + 2-tab nav (DSP / Device Settings) -->
 <header class="flex items-center justify-between px-6 h-[52px] border-b border-border">
   <div class="flex items-center gap-3.5">
@@ -142,7 +144,7 @@
         <input type="search" id="presetSearch" placeholder="Filter presets" class="flex-1 bg-transparent text-text-1 text-xs outline-none placeholder:text-text-3" />
       </div>
       <div id="presetList" class="flex flex-col gap-0.5"></div>
-      <button type="button" id="btnDisableEq" class="btn-disable">Disable EQ</button>
+      <button type="button" id="btnDisableEq" class="btn-eq-disable">Disable EQ</button>
     </section>
 
     <!-- LOAD EXTERNAL -->
@@ -207,8 +209,8 @@
     </section>
 
     <section>
-      <h3 class="sidebar-head">Danger zone</h3>
-      <button type="button" id="btnFactoryReset" class="danger-zone-button self-start">Reset all EQ slots to defaults</button>
+      <h3 class="sidebar-head">Reset</h3>
+      <button type="button" id="btnFactoryReset" class="btn-outline intent-danger self-start">Reset all EQ slots to defaults</button>
     </section>
   </div>
 </section>

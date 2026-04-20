@@ -78,6 +78,22 @@
 	color-scheme: dark;
 }
 
+/* Button variants — when to use which.
+   - .btn-primary       : accent fill. Reserved for commit actions (Sync to RAM, Save to flash, Connect).
+                          At most one per screen area.
+   - .btn-outline       : 1px border, transparent bg. Preset-bar actions (Update, Save As New, AutoEQ, Export).
+   - .btn-outline.intent-danger : same shape, accent border + text. Destructive actions (Factory Reset).
+   - .btn-ghost         : no border, no bg, text-2 colour. Low-weight text actions.
+   - .btn-ghost-icon    : 14px stroke icons, title+aria-label required. Undo/redo, view toggles, dismiss.
+   - .btn-ghost-danger / .btn-danger : text-3 default, accent-dim hover. Destructive ghost actions.
+   - .btn-neutral / .btn-success : legacy aliases of ghost/primary — prefer renaming on touch.
+   - .btn-icon          : 28px square icon container. Utility icons that aren't on the top chrome.
+   - .btn-eq-disable    : sidebar "Disable EQ" full-width row. Semantic one-off, not a generic variant.
+   - .prow              : sidebar action row (preset list + Load External). Full-width, left-aligned.
+   - .ab-btn            : A/B/Swap pills in the secondary action row.
+   - .bt                : bottom-panel tabs (Tabular EQ / Preamp Gain).
+   Base rule: the canvas is the hero. Only commit actions get fill; everything else is ghost or outline. */
+
 /* Button intents. Deliberately lightweight — no heavy borders or
    chunky padding. Commit actions (primary) are the one exception;
    everything else is ghost-style so the canvas stays the hero. */
@@ -295,14 +311,42 @@ input:checked + .slider:before {
 	background-color: white;
 }
 
-/* Wordmark */
+/* Wordmark — bumped from 0.75rem to 0.875rem so the brand carries real
+   weight in the 52px header instead of reading as ornamentation. */
 .wordmark {
 	font-family: var(--font-mono);
-	font-size: 0.75rem;
+	font-size: 0.875rem;
 	letter-spacing: 0.2em;
 	color: var(--color-text-2);
 	text-transform: uppercase;
 	margin: 0;
+}
+
+/* Skip link — first focusable element in body. Off-screen by default,
+   slides into the top-left corner when focused so keyboard users can
+   jump past the chrome into the EQ canvas. */
+.skip-link {
+	position: absolute;
+	top: -100px;
+	left: 8px;
+	background: var(--color-surface-2);
+	color: var(--color-text-1);
+	padding: 6px 12px;
+	z-index: 100;
+	border-radius: 4px;
+	font-size: 12px;
+	font-family: inherit;
+	text-decoration: none;
+	border: 1px solid var(--color-border);
+	transition: top 150ms ease-out;
+}
+.skip-link:focus {
+	top: 8px;
+	outline: 1px solid var(--color-accent);
+	outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+	.skip-link { transition: none; }
 }
 .wordmark .accent {
 	color: var(--color-accent);
@@ -456,8 +500,9 @@ button.btn-ghost-icon:focus-visible {
 	color: var(--color-accent);
 }
 
-/* Red-outline "Disable EQ" button — sidebar action. */
-.btn-disable {
+/* Semantic one-off for the sidebar "Disable EQ" action. Not a reusable
+   button variant — specific to this single affordance. */
+.btn-eq-disable {
 	display: block;
 	width: 100%;
 	margin-top: 10px;
@@ -471,10 +516,10 @@ button.btn-ghost-icon:focus-visible {
 	cursor: pointer;
 	font-family: inherit;
 }
-.btn-disable:hover {
+.btn-eq-disable:hover {
 	background: var(--color-accent-dim);
 }
-.btn-disable:focus-visible {
+.btn-eq-disable:focus-visible {
 	outline: 1px solid var(--color-accent);
 	outline-offset: 2px;
 }
@@ -575,11 +620,41 @@ button.btn-ghost-icon:focus-visible {
 	outline-offset: -1px;
 }
 
-/* Italic "Preset changed" / "Pending changes" chip. */
+/* Chip taxonomy for in-flight action feedback. All share the 11px letter-
+   spacing so they line-swap cleanly in the same DOM slot.
+   - .chip-pending  : dirty-state acknowledgement (Preset changed / Pending changes).
+   - .chip-syncing  : active async action (sync, flash, AutoEQ fit, spectrum attach).
+   - .chip-error    : failed action — semibold, accent colour, non-italic for urgency.
+   - .chip-success  : succeeded action — brief, usually toggled off after ~600ms by JS. */
+.chip-pending,
+.chip-syncing,
+.chip-error,
+.chip-success {
+	font-size: 11px;
+	letter-spacing: 0.02em;
+}
 .chip-pending {
 	font-style: italic;
-	font-size: 11px;
 	color: var(--color-text-3);
+}
+.chip-syncing {
+	font-style: italic;
+	color: var(--color-text-2);
+	animation: chip-syncing-pulse 1.2s ease-in-out infinite;
+}
+@keyframes chip-syncing-pulse {
+	0%, 100% { opacity: 0.55; }
+	50%      { opacity: 1; }
+}
+.chip-error {
+	color: var(--color-accent);
+	font-weight: 600;
+}
+.chip-success {
+	color: var(--color-success);
+}
+@media (prefers-reduced-motion: reduce) {
+	.chip-syncing { animation: none; opacity: 1; }
 }
 
 /* Confirm popover scaffold — used for flash-write confirm anchor. */
@@ -608,25 +683,17 @@ button.btn-ghost-icon:focus-visible {
 	accent-color: var(--color-accent);
 	cursor: pointer;
 }
-.danger-zone-button {
-	display: inline-flex;
-	align-items: center;
-	padding: 6px 12px;
-	border-radius: 4px;
-	border: 1px solid var(--color-accent);
+/* Intent modifier for .btn-outline — accent border + text, tinted hover.
+   Use for destructive actions (factory reset, delete). Keeps the button
+   shape consistent with the rest of the preset-bar outlines. */
+.btn-outline.intent-danger {
+	border-color: var(--color-accent);
 	color: var(--color-accent);
-	background: transparent;
-	font-size: 11px;
-	letter-spacing: 0.04em;
-	cursor: pointer;
-	font-family: inherit;
 }
-.danger-zone-button:hover {
+button.btn-outline.intent-danger:hover:not(:disabled) {
 	background: var(--color-accent-dim);
-}
-.danger-zone-button:focus-visible {
-	outline: 1px solid var(--color-accent);
-	outline-offset: 2px;
+	border-color: var(--color-accent);
+	color: var(--color-accent);
 }
 
 /* Log console — Clear link-button (tiny, muted, power-user affordance).
@@ -1108,4 +1175,29 @@ body[data-alt-hold="1"] .kbd-chip {
 #eqCanvas:focus-visible {
 	outline: 2px solid var(--color-accent);
 	outline-offset: -2px;
+}
+
+/* Touch-target inflation for coarse pointers (touch, stylus). Desktop
+   density is preserved under fine pointers; touch users get ≥40px hit
+   areas without re-theming the whole app. */
+@media (pointer: coarse) {
+	button.btn-ghost-icon {
+		padding: 10px;
+		min-width: 40px;
+		min-height: 40px;
+	}
+	.ab-btn {
+		padding: 10px 14px;
+		min-height: 40px;
+	}
+	.nav-tab {
+		padding: 16px 18px;
+	}
+	button.btn-outline {
+		padding: 10px 14px;
+	}
+	.logtray {
+		padding: 10px 24px;
+		min-height: 40px;
+	}
 }
