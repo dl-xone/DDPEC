@@ -22,6 +22,7 @@
 //   - listAudioInputs() / listAudioOutputs()   device enumeration
 //   - refreshSystemEqGraph()                   live-rebuild after band edits
 
+import { setAudioReactiveAnalyser } from "./audioReactive.ts";
 import { log } from "./helpers.ts";
 import type { Band } from "./main.ts";
 import { getEqState, getGlobalGainState, isEqEnabled } from "./state.ts";
@@ -274,6 +275,11 @@ export async function engageSystemEq(): Promise<void> {
 		stream,
 	};
 
+	// Pump the analyser into the shared audio-reactive substrate so the
+	// band-point pulse, header level strip, and tray glow all read from
+	// the same FFT once per frame.
+	setAudioReactiveAnalyser(analyser);
+
 	// Watch for the input track ending (device unplugged, OS audio reset).
 	// Disengage gracefully so the UI can react and the user gets a clear
 	// "audio source disappeared" path rather than silent failure.
@@ -296,6 +302,11 @@ export async function disengageSystemEq(): Promise<void> {
 	if (!graph) return;
 	const g = graph;
 	graph = null;
+
+	// Tear down the audio-reactive feed first so its RAF loop stops before
+	// we close the context (otherwise the next frame would try to read from
+	// a closed analyser).
+	setAudioReactiveAnalyser(null);
 
 	// Disconnect every node we created. Any failures here mean the node
 	// was already disconnected; safe to ignore.

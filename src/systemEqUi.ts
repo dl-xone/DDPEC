@@ -16,6 +16,11 @@
 // close. Anchored to the pill via getBoundingClientRect — repositioned on
 // scroll/resize so it tracks if the layout shifts.
 
+import {
+	getRms,
+	isAudioReactiveSilent,
+	subscribeAudioReactive,
+} from "./audioReactive.ts";
 import { log, toast } from "./helpers.ts";
 import {
 	disengageSystemEq,
@@ -48,6 +53,7 @@ let latencyLabelEl: HTMLElement | null = null;
 let doubleEqChipEl: HTMLElement | null = null;
 let inputHintEl: HTMLElement | null = null;
 let outputHintEl: HTMLElement | null = null;
+let levelStripEl: HTMLElement | null = null;
 
 // Cache of recently enumerated devices, keyed by id. Used to render the
 // pill suffix ("System EQ · AKLite") without re-enumerating on every
@@ -75,9 +81,16 @@ export function initSystemEqUi(): void {
 	doubleEqChipEl = document.getElementById("systemEqDoubleEqChip");
 	inputHintEl = document.getElementById("systemEqInputHint");
 	outputHintEl = document.getElementById("systemEqOutputHint");
+	levelStripEl = document.getElementById("systemEqLevelStrip");
 
 	if (!pillEl || !popoverEl) return; // markup absent — bail silently
 	initialized = true;
+
+	// Audio-reactive surfaces — header level strip and pill device label
+	// share the audioReactive tick stream. Pill breathing animation runs
+	// purely in CSS (already a keyframe loop), so we only need a JS-side
+	// subscriber for elements whose intensity is data-driven.
+	subscribeAudioReactive(updateLevelStrip);
 
 	pillEl.addEventListener("click", () => togglePopover());
 	pillEl.addEventListener("keydown", (e) => {
@@ -304,6 +317,24 @@ function rebuildSelect(
 			hintEl.textContent = "";
 		}
 	}
+}
+
+// Drive the header level strip from the audioReactive tick stream. The
+// strip's --system-eq-level CSS variable maps to opacity in style.css; we
+// also smooth the perceived loudness with a square-root so quiet music
+// still produces a visible signal.
+function updateLevelStrip(): void {
+	if (!levelStripEl) return;
+	if (isAudioReactiveSilent()) {
+		levelStripEl.style.setProperty("--system-eq-level", "0");
+		return;
+	}
+	const rms = getRms();
+	// Map RMS (0..1) → opacity (0..1) with sqrt for perceptual scaling.
+	// Cap at 0.85 so the strip never quite reaches opaque — keeps it
+	// reading as a glow rather than a blocky bar.
+	const intensity = Math.min(0.85, Math.sqrt(rms));
+	levelStripEl.style.setProperty("--system-eq-level", intensity.toFixed(3));
 }
 
 // Public hook for Phase 5 — drift detector and double-EQ detector flip

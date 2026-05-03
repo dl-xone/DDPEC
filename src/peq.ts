@@ -1,3 +1,9 @@
+import {
+	getEnergyAtFreq,
+	isAudioReactiveActive,
+	subscribeAudioReactive,
+	trackFrequencies,
+} from "./audioReactive.ts";
 import { SAMPLE_RATE } from "./constants.ts";
 import {
 	computeBiquad,
@@ -5,13 +11,17 @@ import {
 	phaseRad,
 	typeHasGain,
 } from "./dsp/biquad.ts";
+import { haptic } from "./haptic.ts";
 import type { Band } from "./main.ts";
 import { measurementDbAt, targetDbAt } from "./measurements.ts";
+import { evaluateNumericInput } from "./numericInput.ts";
 import peqTemplate from "./peq.template.html?raw";
 import { isSpectrumActive, readSpectrum } from "./spectrum.ts";
-import { getLoadedPresetSnapshot, isBandChangedVsPreset, isEqEnabled } from "./state.ts";
-import { haptic } from "./haptic.ts";
-import { evaluateNumericInput } from "./numericInput.ts";
+import {
+	getLoadedPresetSnapshot,
+	isBandChangedVsPreset,
+	isEqEnabled,
+} from "./state.ts";
 
 /**
  * CONFIG & CONSTANTS
@@ -138,9 +148,7 @@ function sortedView(bands: Band[]): SortedView {
 	return bands
 		.map((band, originalIndex) => ({ band, originalIndex }))
 		.sort(
-			(a, b) =>
-				a.band.freq - b.band.freq ||
-				a.originalIndex - b.originalIndex,
+			(a, b) => a.band.freq - b.band.freq || a.originalIndex - b.originalIndex,
 		);
 }
 
@@ -203,7 +211,9 @@ export function selectBandByPosition(pos: number): Band | null {
 	selectedIndex = hit.band.index;
 	syncBandTable(localBands);
 	draw();
-	const canvas = document.getElementById("eqCanvas") as HTMLCanvasElement | null;
+	const canvas = document.getElementById(
+		"eqCanvas",
+	) as HTMLCanvasElement | null;
 	canvas?.focus({ preventScroll: true });
 	return hit.band;
 }
@@ -416,7 +426,10 @@ function drawTarget(
 
 function drawCurve(c: CanvasRenderingContext2D, width: number, height: number) {
 	const accent = themeColor("--color-accent", "#cf4863");
-	const inactive = themeColor("--color-curve-inactive", "rgba(220,220,225,0.16)");
+	const inactive = themeColor(
+		"--color-curve-inactive",
+		"rgba(220,220,225,0.16)",
+	);
 	const measurement = themeColor("--color-measurement", "#e5b850");
 	const measurementDim = themeColor(
 		"--color-measurement-dim",
@@ -478,11 +491,7 @@ function drawCurve(c: CanvasRenderingContext2D, width: number, height: number) {
 // Feature 7 — delta line (active − inactive) in dB. Scaled so ±10 dB maps
 // to ±20% of the chart height: drawn relative to the 0 dB axis to read as
 // a "delta indicator" rather than competing with the main EQ curve.
-function drawDelta(
-	c: CanvasRenderingContext2D,
-	width: number,
-	height: number,
-) {
+function drawDelta(c: CanvasRenderingContext2D, width: number, height: number) {
 	if (!inactiveBands) return;
 	const accent = themeColor("--color-delta", "#8e7cc3");
 	const zeroY = gainToY(0, height);
@@ -490,7 +499,9 @@ function drawDelta(
 	// ±10 dB → ±20% of chart height, so 1 dB ≈ 2% of chart height in pixels.
 	const dbToPx = (chartH * 0.2) / 10;
 	const activeCoeffs = localBands.map((b) => computeBiquad(b, SAMPLE_RATE));
-	const inactiveCoeffs = inactiveBands.map((b) => computeBiquad(b, SAMPLE_RATE));
+	const inactiveCoeffs = inactiveBands.map((b) =>
+		computeBiquad(b, SAMPLE_RATE),
+	);
 	const startX = CONFIG.padding;
 	const endX = width - CONFIG.padding;
 	c.save();
@@ -500,7 +511,8 @@ function drawDelta(
 	for (let i = 0; i <= endX - startX; i++) {
 		const x = startX + i;
 		const freq = xToFreq(x, width);
-		const delta = getMagnitude(freq, activeCoeffs) - getMagnitude(freq, inactiveCoeffs);
+		const delta =
+			getMagnitude(freq, activeCoeffs) - getMagnitude(freq, inactiveCoeffs);
 		const clampedDelta = Math.max(-20, Math.min(20, delta));
 		const y = zeroY - clampedDelta * dbToPx;
 		if (i === 0) c.moveTo(x, y);
@@ -513,11 +525,7 @@ function drawDelta(
 // Feature 8 — summed phase response. Walks pixel columns, sums per-band
 // phase, unwraps left-to-right so adjacent columns don't jump by 2π, and
 // maps ±π to ±0.5 of the pixel height around the canvas vertical middle.
-function drawPhase(
-	c: CanvasRenderingContext2D,
-	width: number,
-	height: number,
-) {
+function drawPhase(c: CanvasRenderingContext2D, width: number, height: number) {
 	const enabled = localBands.filter((b) => b.enabled);
 	const coeffs = enabled.map((b) => computeBiquad(b, SAMPLE_RATE));
 	const startX = CONFIG.padding;
@@ -596,6 +604,15 @@ function drawHandles(
 	c.save();
 	if (bypassed) c.globalAlpha = 0.45;
 
+	// Audio-reactive pulse: when System EQ is engaged, each band dot's
+	// radius scales with the FFT energy at its frequency (1.0 → 1.4) and
+	// the surrounding glow brightens. Pre-register every band's freq so
+	// the cache always has a fresh entry by the time we read it.
+	const reactiveActive = isAudioReactiveActive();
+	if (reactiveActive) {
+		trackFrequencies(localBands.map((b) => b.freq));
+	}
+
 	// Handle numbers follow the sorted display order so they match the
 	// tabular editor's "Band N" labels. Lowest-freq band is #1.
 	const view = sortedView(localBands);
@@ -604,7 +621,9 @@ function drawHandles(
 		const y = gainToY(band.gain, height);
 		const isSelected = band.index === selectedIndex;
 		const isDisabled = !band.enabled;
-		const r = isSelected ? 13 : 11;
+		const baseR = isSelected ? 13 : 11;
+		const pulse = reactiveActive ? getEnergyAtFreq(band.freq) : 0;
+		const r = baseR * (1 + pulse * 0.4);
 
 		// Subtle outer ring — 1.5px halo around the fill circle.
 		c.beginPath();
@@ -612,6 +631,20 @@ function drawHandles(
 		c.strokeStyle = bandRing;
 		c.lineWidth = 1.5;
 		c.stroke();
+
+		// Pulse glow — only draws when audio is flowing through System EQ.
+		// A second translucent halo proportional to band energy. Subtle
+		// constellation effect, not strobing.
+		if (pulse > 0.05) {
+			c.save();
+			c.globalAlpha = pulse * 0.55;
+			c.beginPath();
+			c.arc(x, y, r + 4 + pulse * 4, 0, 2 * Math.PI);
+			c.strokeStyle = accent;
+			c.lineWidth = 1.5;
+			c.stroke();
+			c.restore();
+		}
 
 		// Fill circle — dark navy (light navy-tint on light theme).
 		c.beginPath();
@@ -662,7 +695,10 @@ function drawLegend(
 	_height: number,
 ) {
 	const accent = themeColor("--color-accent", "#cf4863");
-	const inactiveCol = themeColor("--color-curve-inactive", "rgba(220,220,225,0.16)");
+	const inactiveCol = themeColor(
+		"--color-curve-inactive",
+		"rgba(220,220,225,0.16)",
+	);
 	const measurement = themeColor("--color-measurement", "#e5b850");
 	const target = themeColor("--color-target", "#5eb8c4");
 	const plateBg = themeColor("--color-legend-bg", "rgba(17,17,19,0.78)");
@@ -788,7 +824,8 @@ function buildBandTable(table: HTMLElement, bands: Band[]) {
 		h.dataset.originalIndex = String(originalIndex);
 
 		const typeLabel = document.createElement("div");
-		typeLabel.className = "text-[9px] uppercase tracking-wider text-text-3 font-mono";
+		typeLabel.className =
+			"text-[9px] uppercase tracking-wider text-text-3 font-mono";
 		typeLabel.textContent = BAND_TYPE_LABELS[band.type] ?? "Peaking";
 
 		const bandRow = document.createElement("div");
@@ -1095,9 +1132,7 @@ export function renderPEQ(
 		// check fires cleanly.
 		const currentFingerprint = sortFingerprint(sortedView(bands));
 		const focused = document.activeElement;
-		const freqInputFocused = cellRefs.some(
-			(r) => r?.freq === focused,
-		);
+		const freqInputFocused = cellRefs.some((r) => r?.freq === focused);
 		const midInteraction = freqInputFocused || draggingIndex !== null;
 		const needsRebuild =
 			cellRefs.length !== bands.length ||
@@ -1120,8 +1155,7 @@ function buildBandCountControls(host: HTMLElement): {
 	countLabel: HTMLElement;
 } {
 	host.replaceChildren();
-	host.className =
-		"flex items-center justify-end gap-2 px-4 pt-2 pb-1";
+	host.className = "flex items-center justify-end gap-2 px-4 pt-2 pb-1";
 
 	const countLabel = document.createElement("span");
 	countLabel.className =
@@ -1171,9 +1205,7 @@ const CLICK_DRAG_THRESHOLD_PX = 3;
 // to want to land on. Threshold is in canvas pixels measured along the
 // axis the user is dragging — keeps snap "feel" the same regardless of
 // where on the freq scale the band sits.
-const FREQ_SNAPS = [
-	20, 40, 60, 100, 250, 500, 1000, 2500, 5000, 10000, 20000,
-];
+const FREQ_SNAPS = [20, 40, 60, 100, 250, 500, 1000, 2500, 5000, 10000, 20000];
 const GAIN_SNAPS = [-12, -6, -3, 0, 3, 6, 12];
 const SNAP_THRESHOLD_PX = 6;
 
@@ -1290,6 +1322,10 @@ function drawSpectrum(
 // Animation loop driven by the spectrum feature. Idempotent — calling
 // startSpectrumLoop() twice is a no-op. Stops automatically when the
 // spectrum is no longer active.
+//
+// System EQ has its own RAF inside audioReactive.ts; peq subscribes to its
+// ticks below so the canvas repaints on every audio frame without needing
+// a second loop here.
 let spectrumRafId = 0;
 function spectrumLoop() {
 	if (!isSpectrumActive()) {
@@ -1305,6 +1341,12 @@ export function startSpectrumLoop() {
 	if (typeof requestAnimationFrame === "undefined") return;
 	spectrumRafId = requestAnimationFrame(spectrumLoop);
 }
+
+// Subscribe at module init so audio-reactive ticks repaint the canvas
+// continuously while System EQ is engaged. draw() guards against missing
+// canvas so this is safe before the first renderPEQ() call. Subscribing
+// once and forever — the subscription is cheap when no analyser is live.
+subscribeAudioReactive(() => draw());
 
 export function stopSpectrumLoop() {
 	if (spectrumRafId && typeof cancelAnimationFrame !== "undefined") {
@@ -1614,11 +1656,8 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 		const freqRaw = xToFreq(clampedX, rect.width);
 		// Feature E — magnetic snap on freq. Compare in canvas pixels so the
 		// pull "feels" the same regardless of where on the log scale we are.
-		const freqSnap = applySnap(
-			freqRaw,
-			FREQ_SNAPS,
-			SNAP_THRESHOLD_PX,
-			(v) => freqToX(v, rect.width),
+		const freqSnap = applySnap(freqRaw, FREQ_SNAPS, SNAP_THRESHOLD_PX, (v) =>
+			freqToX(v, rect.width),
 		);
 		capturedFreqSnap = freqSnap.captured;
 		const freq = Math.round(freqSnap.value);
@@ -1628,11 +1667,8 @@ function wireCanvasInteraction(el: HTMLCanvasElement) {
 		const gainRaw = yToGain(clampedY, rect.height);
 		// Magnetic snap on gain. Applied to both fine + coarse drags; the
 		// snap pull is small (6 px) so it doesn't fight the drag.
-		const gainSnap = applySnap(
-			gainRaw,
-			GAIN_SNAPS,
-			SNAP_THRESHOLD_PX,
-			(v) => gainToY(v, rect.height),
+		const gainSnap = applySnap(gainRaw, GAIN_SNAPS, SNAP_THRESHOLD_PX, (v) =>
+			gainToY(v, rect.height),
 		);
 		capturedGainSnap = gainSnap.captured;
 		const gain = e.altKey

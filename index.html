@@ -44,6 +44,11 @@
   </div>
 </header>
 
+<!-- System EQ live level strip — sits flush under the header border, fades in
+     when audio flows through System EQ. Driven by audioReactive via the
+     --system-eq-level CSS custom property. -->
+<div id="systemEqLevelStrip" class="system-eq-level-strip" aria-hidden="true"></div>
+
 <!-- Preset action bar — undo/redo + preset title + outline actions -->
 <div class="flex items-center justify-between px-6 py-2.5 border-b border-border">
   <div class="flex items-center gap-2.5">
