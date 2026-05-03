@@ -32,8 +32,8 @@ import {
 	isSystemEqActive,
 	listAudioInputs,
 	listAudioOutputs,
-	type SystemEqLatency,
 	pickSmartDefaultOutput,
+	type SystemEqLatency,
 	setSystemEqInput,
 	setSystemEqLatency,
 	setSystemEqOutput,
@@ -514,7 +514,9 @@ async function applyAutoStartToTauri(enable: boolean): Promise<void> {
 		if (enable) await plugin.enable();
 		else await plugin.disable();
 	} catch (err) {
-		log(`System EQ: auto-start ${enable ? "enable" : "disable"} failed (${(err as Error).message})`);
+		log(
+			`System EQ: auto-start ${enable ? "enable" : "disable"} failed (${(err as Error).message})`,
+		);
 	}
 }
 

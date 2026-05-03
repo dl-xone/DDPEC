@@ -22,14 +22,17 @@
 //   - listAudioInputs() / listAudioOutputs()   device enumeration
 //   - refreshSystemEqGraph()                   live-rebuild after band edits
 
-import { setAudioReactiveAnalyser } from "./audioReactive.ts";
+import {
+	isAudioReactiveSilent,
+	setAudioReactiveAnalyser,
+} from "./audioReactive.ts";
 import { log } from "./helpers.ts";
 import type { Band } from "./main.ts";
 import {
+	getDevice,
 	getEqState,
 	getGlobalGainState,
 	isEqEnabled,
-	getDevice,
 } from "./state.ts";
 
 export type SystemEqLatency = "tight" | "balanced" | "comfortable";
@@ -315,7 +318,9 @@ export async function engageSystemEq(): Promise<void> {
 	const onStateChange = (): void => {
 		if (!graph || graph.ctx !== ctx) return;
 		if (ctx.state === "interrupted") {
-			log("System EQ: AudioContext interrupted (likely sleep); will resume on wake.");
+			log(
+				"System EQ: AudioContext interrupted (likely sleep); will resume on wake.",
+			);
 		} else if (ctx.state === "suspended") {
 			void ctx.resume().catch((err) => {
 				log(`System EQ: resume failed (${(err as Error).message})`);
@@ -369,6 +374,7 @@ export async function disengageSystemEq(): Promise<void> {
 		window.clearTimeout(driftPollHandle);
 		driftPollHandle = null;
 	}
+	lastDriftBroadcast = null;
 	if (g.statechangeHandler) {
 		try {
 			g.ctx.removeEventListener("statechange", g.statechangeHandler);
@@ -574,40 +580,46 @@ export function initSystemEqListeners(): void {
 		if (document.visibilityState !== "visible") return;
 		if (graph.ctx.state === "suspended") {
 			void graph.ctx.resume().catch((err) => {
-				log(`System EQ: resume on visibility change failed (${(err as Error).message})`);
+				log(
+					`System EQ: resume on visibility change failed (${(err as Error).message})`,
+				);
 			});
 		}
 	});
 }
 
-// Drift detection — compares the post-engagement RMS to a silence floor.
-// If still ~0 a couple of seconds in, the input device isn't actually
-// receiving anything, which usually means the macOS system output isn't
-// routed through BlackHole. We surface the drift state via an event so
-// systemEqUi.ts can flip the pill colour without having to know about
-// the Web Audio analyser. Re-runs every 4s while engaged to catch
-// late-emerging routing changes (user unplugged BlackHole, etc.).
+// Drift detection — flags the case where System EQ is engaged but no audio
+// is reaching the chain (usually because macOS system output isn't routed
+// through BlackHole). Uses the audioReactive `isAudioReactiveSilent()`
+// signal which has a 150ms debounce, plus a longer "sustained silence"
+// window so legitimate quiet moments (paused music, gaps between songs)
+// don't false-positive.
+//
+// Drift = "audio hasn't been heard for >5 seconds since engagement". The
+// 5s window is generous enough to ride through track transitions but
+// short enough to catch routing failures within a reasonable time.
+const DRIFT_SUSTAINED_MS = 5000;
 let driftPollHandle: number | null = null;
+let lastDriftBroadcast: boolean | null = null;
 function runDriftCheck(): void {
 	if (!graph) return;
-	const analyser = graph.analyser;
-	const buffer = new Float32Array(analyser.fftSize);
-	analyser.getFloatTimeDomainData(buffer);
-	let sumSquares = 0;
-	for (let i = 0; i < buffer.length; i++) sumSquares += buffer[i] * buffer[i];
-	const rms = Math.sqrt(sumSquares / buffer.length);
-	// -55 dBFS floor matches the audioReactive silence threshold so the
-	// drift detector and the level-strip "alive" indicator agree on what
-	// counts as silent.
-	const SILENCE_LINEAR = 10 ** (-55 / 20);
-	const isDrift = rms < SILENCE_LINEAR;
-	broadcastDrift(isDrift);
+	const sinceEngage = performance.now() - graph.engagedAt;
+	let isDrift = false;
+	if (sinceEngage >= DRIFT_SUSTAINED_MS) {
+		// Sustained silence since engagement = drift. audioReactive maintains
+		// `lastNonSilentAt` so we don't have to track it ourselves.
+		isDrift = isAudioReactiveSilent();
+	}
+	if (isDrift !== lastDriftBroadcast) {
+		broadcastDrift(isDrift);
+		lastDriftBroadcast = isDrift;
+	}
 
-	// Schedule the next poll. Slow cadence (4s) keeps us out of the way of
-	// the audio-reactive RAF; drift state doesn't need millisecond accuracy.
+	// Slow cadence (3s) keeps us out of the way of the audio-reactive RAF;
+	// drift state doesn't need millisecond accuracy.
 	if (typeof window !== "undefined") {
 		if (driftPollHandle !== null) window.clearTimeout(driftPollHandle);
-		driftPollHandle = window.setTimeout(runDriftCheck, 4000);
+		driftPollHandle = window.setTimeout(runDriftCheck, 3000);
 	}
 }
 

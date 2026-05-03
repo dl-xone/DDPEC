@@ -94,7 +94,9 @@ function init(): void {
 
 	const tauri = getTauri();
 
-	const toggle = document.getElementById("dropdownToggle") as HTMLInputElement | null;
+	const toggle = document.getElementById(
+		"dropdownToggle",
+	) as HTMLInputElement | null;
 	if (toggle) {
 		toggle.addEventListener("change", async () => {
 			if (!tauri) {
@@ -130,7 +132,9 @@ function init(): void {
 		window.location.href = "/";
 	});
 
-	const preamp = document.getElementById("dropdownPreamp") as HTMLInputElement | null;
+	const preamp = document.getElementById(
+		"dropdownPreamp",
+	) as HTMLInputElement | null;
 	const preampLabel = document.getElementById("dropdownPreampLabel");
 	if (preamp && preampLabel) {
 		// Value is read from localStorage if persisted by the main window.

@@ -9,7 +9,6 @@
 // shelling out.
 
 import { log, toast } from "./helpers.ts";
-import { playConfirmationTone } from "./systemEqConfirmTone.ts";
 import {
 	getSystemEqState,
 	listAudioInputs,
@@ -17,6 +16,7 @@ import {
 	setSystemEqInput,
 	setSystemEqOutput,
 } from "./systemEq.ts";
+import { playConfirmationTone } from "./systemEqConfirmTone.ts";
 
 const COMPLETED_KEY = "ddpec.systemEq.wizardCompleted";
 const DEFERRED_KEY = "ddpec.systemEq.wizardDeferred";
@@ -372,9 +372,7 @@ function renderStep3(
 			// Smart defaults: prefer a BlackHole input, prefer a non-default
 			// output (i.e. an actual DAC). Both are best-effort.
 			if (!state.pickedInput) {
-				const blackhole = inputs.find((d) =>
-					/blackhole/i.test(d.label || ""),
-				);
+				const blackhole = inputs.find((d) => /blackhole/i.test(d.label || ""));
 				if (blackhole) {
 					state.pickedInput = blackhole.deviceId;
 					inputSelect.value = blackhole.deviceId;

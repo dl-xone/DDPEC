@@ -360,3 +360,100 @@ exactly what they're verifying when. Lives at the bottom of this doc.
 - Latency feel for music vs. video.
 - Wizard flow at first launch.
 - Sleep/wake recovery (close the lid, open it, audio resumes).
+
+---
+
+## Phase 7 — manual verification checklist
+
+A concrete pass to run on macOS with a USB DAC dongle. Each line maps to
+the phase that introduced the behaviour, so a regression points back to a
+specific change.
+
+### Phase 1 — audio path
+1. Install BlackHole 2ch.
+2. `npm run dev` and open the page.
+3. In DevTools: `await ddpecSystemEq.listAudioInputs()` — confirm the
+   array includes a BlackHole entry (after one `getUserMedia` grant).
+4. Set system output to BlackHole 2ch in macOS Sound preferences.
+5. `ddpecSystemEq.setSystemEqInput("<BlackHole id>")` and
+   `ddpecSystemEq.setSystemEqOutput("<your DAC id>")`.
+6. `await ddpecSystemEq.engageSystemEq()` and play any audio.
+   - Expect audio through your DAC, EQ applied.
+   - No clicks/pops on engage or disengage.
+7. `await ddpecSystemEq.disengageSystemEq()` — expect audio to keep
+   playing through the system default once the OS reroutes.
+
+### Phase 2 — main-window UI
+8. Click the System EQ pill in the header — popover opens beneath it.
+   Click outside — popover closes. Press Escape — popover closes.
+9. Toggle the switch on; pill turns accent-coloured, dot pulses.
+10. Pick a different output from the dropdown — audio swaps without a
+    pop (cross-fade applied).
+11. Open Advanced disclosure; the latency slider appears with the
+    current value labelled (Tight / Balanced / Comfortable).
+12. Resize the window and scroll — popover stays anchored to the pill.
+
+### Phase 3 — animations
+13. With System EQ engaged and audio playing, the band dots in the EQ
+    canvas pulse with the audio (more energy at boosted bands).
+14. The thin 2px strip directly below the header glows when audio is
+    flowing; fades to invisible when audio stops.
+15. Pause audio for >150ms — every animation surface goes quiet.
+16. Toggle macOS reduced-motion in System Settings → Accessibility —
+    the breathing dot stops, level strip stays invisible, band-pulse
+    halos stop drawing.
+
+### Phase 4 — Tauri shell
+17. `npm run tauri:dev` — Tauri main window opens with the same layout
+    as the browser build. A tray icon appears in the macOS menubar.
+18. Click the tray icon — compact dropdown panel slides down beneath it.
+    Click elsewhere — dropdown hides.
+19. Right-click the tray icon — context menu shows Open editor / Quit.
+20. Toggle "Start at login" in Device Settings → System EQ. Quit and
+    re-login. Expect DDPEC to start automatically.
+21. On a fresh launch (clear `ddpec.systemEq.wizardCompleted` from
+    localStorage), the wizard appears. Walk through all three steps.
+    Step 1 detect should turn ✓ once BlackHole is installed and a
+    `getUserMedia` permission has been granted at least once.
+
+### Phase 5 — drift, double-EQ, sleep/wake
+22. Engage System EQ with macOS output set to your DAC (NOT BlackHole)
+    — after ~5 seconds, the pill turns amber (drift state).
+23. Switch macOS output back to BlackHole — within 3 seconds the pill
+    returns to accent.
+24. Engage System EQ with the dongle connected and a non-flat preset
+    loaded — the popover shows the "Possible double-EQ" chip.
+25. Flatten the dongle (load Default preset, sync) — chip clears.
+26. Close the laptop lid for >30s, reopen — audio resumes within a few
+    seconds. The log tray shows the "AudioContext interrupted… resume"
+    sequence.
+
+### Phase 6 — flair
+27. Toggle System EQ — taptic feedback fires (if your trackpad supports
+    it; reduced-motion respected).
+28. Drag the latency slider — taps once per detent change, not buzz.
+29. Open Cmd+K palette — search "system eq". Should see Engage /
+    Disengage / Setup wizard / Switch output entries. Run "Switch
+    output" — picker modal opens with current outputs.
+30. Press Cmd+Shift+E from any app on macOS — DDPEC toggles System EQ.
+31. Run the wizard to completion — a brief 500 Hz tone plays through
+    the System EQ chain after Done.
+32. Open the popover with no output set — output dropdown should be
+    pre-selected to your connected DAC (smart default).
+
+### Things I cannot verify
+
+- Audible quality of the EQ output (clicks, distortion, frequency
+  response correctness on real hardware).
+- Tauri build success on macOS — `cargo build` requires the Rust
+  toolchain + Tauri's transitive C dependencies. The scaffold matches
+  the Tauri 2 / plugin-autostart / plugin-global-shortcut docs.
+- macOS-specific behaviours — Login Item registration, Sound
+  preferences deep-link, vibrancy on the dropdown panel.
+- Hardware-in-the-loop sleep/wake recovery — only checkable on a real
+  Mac with a USB DAC connected.
+
+If any of those go sideways, the symptoms map to identifiable code
+points: search for `"System EQ:"` in the log tray output (every
+relevant module logs there), and check the docs of `setAudioReactiveAnalyser`
+/ `engageSystemEq` / `tauriBridge` for the IPC pattern in play.

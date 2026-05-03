@@ -40,13 +40,16 @@ type TauriListen = <T = unknown>(
 	event: string,
 	handler: (e: TauriEvent<T>) => void,
 ) => Promise<() => void>;
-type TauriInvoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+type TauriInvoke = (
+	cmd: string,
+	args?: Record<string, unknown>,
+) => Promise<unknown>;
 
 function isTauri(): boolean {
 	return (
 		typeof window !== "undefined" &&
-		(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ !==
-			undefined
+		(window as unknown as { __TAURI_INTERNALS__?: unknown })
+			.__TAURI_INTERNALS__ !== undefined
 	);
 }
 
@@ -100,7 +103,9 @@ export async function initTauriBridge(): Promise<void> {
 			try {
 				await disengageSystemEq();
 			} catch (err) {
-				log(`System EQ: disengage from tray failed (${(err as Error).message})`);
+				log(
+					`System EQ: disengage from tray failed (${(err as Error).message})`,
+				);
 			}
 		});
 		// Cmd+Shift+E global hotkey — Rust emits this; we figure out which
@@ -137,8 +142,9 @@ export async function initTauriBridge(): Promise<void> {
 			const autostart = (await import(
 				/* @vite-ignore */ "@tauri-apps/plugin-autostart" as string
 			)) as AutoStartPlugin;
-			(window as unknown as { ddpecTauriAutoStart: AutoStartPlugin }).ddpecTauriAutoStart =
-				autostart;
+			(
+				window as unknown as { ddpecTauriAutoStart: AutoStartPlugin }
+			).ddpecTauriAutoStart = autostart;
 		} catch (err) {
 			log(`Tauri autostart plugin missing (${(err as Error).message})`);
 		}
