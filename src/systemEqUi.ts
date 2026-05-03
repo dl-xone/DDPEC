@@ -21,14 +21,19 @@ import {
 	isAudioReactiveSilent,
 	subscribeAudioReactive,
 } from "./audioReactive.ts";
+import { registerCommand } from "./commandPalette.ts";
+import { haptic } from "./haptic.ts";
 import { log, toast } from "./helpers.ts";
+import { searchPickerModal } from "./modal.ts";
 import {
 	disengageSystemEq,
 	engageSystemEq,
 	getSystemEqState,
+	isSystemEqActive,
 	listAudioInputs,
 	listAudioOutputs,
 	type SystemEqLatency,
+	pickSmartDefaultOutput,
 	setSystemEqInput,
 	setSystemEqLatency,
 	setSystemEqOutput,
@@ -108,6 +113,8 @@ export function initSystemEqUi(): void {
 		});
 	}
 	wizardBtnEl?.addEventListener("click", () => openSystemEqWizard());
+
+	registerSystemEqCommands();
 
 	// Audio-reactive surfaces — header level strip and pill device label
 	// share the audioReactive tick stream. Pill breathing animation runs
@@ -216,10 +223,15 @@ function onDocumentClick(e: MouseEvent): void {
 
 async function onToggleChange(): Promise<void> {
 	if (!toggleEl) return;
+	haptic(8);
 	if (toggleEl.checked) {
 		try {
 			await engageSystemEq();
-			toast("System EQ engaged");
+			const state = getSystemEqState();
+			const outName =
+				(state.outputDeviceId && deviceLabels.get(state.outputDeviceId)) ||
+				"system default";
+			toast(`System EQ engaged · ${outName}`);
 		} catch (err) {
 			// Engagement failed — usually missing input or permission denied.
 			// Roll back the toggle so the UI matches reality.
@@ -230,15 +242,22 @@ async function onToggleChange(): Promise<void> {
 		}
 	} else {
 		await disengageSystemEq();
-		toast("System EQ disengaged");
+		toast("System EQ disengaged · audio passes through unchanged");
 	}
 }
 
+let _lastLatency: SystemEqLatency | null = null;
 function onLatencyChange(): void {
 	if (!latencySliderEl) return;
 	const raw = Number(latencySliderEl.value);
 	const idx = Math.max(0, Math.min(LATENCY_VALUES.length - 1, raw));
 	const latency = LATENCY_VALUES[idx];
+	if (_lastLatency !== latency) {
+		// Tap on each detent — gives the slider a satisfying "snap" feel
+		// without buzzing during the drag.
+		haptic(4);
+		_lastLatency = latency;
+	}
 	setSystemEqLatency(latency);
 	if (latencyLabelEl) latencyLabelEl.textContent = LATENCY_LABELS[latency];
 }
@@ -292,6 +311,21 @@ async function populateDeviceLists(): Promise<void> {
 	deviceLabels.clear();
 	for (const d of inputs) deviceLabels.set(d.deviceId, d.label || "Input");
 	for (const d of outputs) deviceLabels.set(d.deviceId, d.label || "Output");
+
+	// Smart output default — if the user has never picked one, suggest the
+	// connected USB DAC (if any) or the first labeled non-default output.
+	// This is the "no surprise empty state" behaviour Phase 6 calls for:
+	// a brand-new user opens the popover and the picker is already on the
+	// right thing.
+	const state = getSystemEqState();
+	if (!state.outputDeviceId) {
+		const smart = await pickSmartDefaultOutput();
+		if (smart && outputSelectEl) {
+			outputSelectEl.value = smart;
+			void setSystemEqOutput(smart);
+		}
+	}
+
 	// Pill suffix may need to update once we have labels.
 	refreshUi();
 }
@@ -366,6 +400,77 @@ function updateLevelStrip(): void {
 	// reading as a glow rather than a blocky bar.
 	const intensity = Math.min(0.85, Math.sqrt(rms));
 	levelStripEl.style.setProperty("--system-eq-level", intensity.toFixed(3));
+}
+
+// Command palette entries — let users drive System EQ from Cmd+K without
+// hunting for the popover. Available-when guards keep "Engage" hidden
+// when already on, etc., so the palette doesn't list dead branches.
+function registerSystemEqCommands(): void {
+	registerCommand({
+		id: "system-eq.engage",
+		title: "Engage System EQ",
+		keywords: ["audio", "blackhole", "macos", "system", "on"],
+		availableWhen: () => !isSystemEqActive(),
+		run: async () => {
+			if (toggleEl) {
+				toggleEl.checked = true;
+				await onToggleChange();
+			} else {
+				try {
+					await engageSystemEq();
+				} catch (err) {
+					toast(`System EQ: ${(err as Error).message}`);
+				}
+			}
+		},
+	});
+	registerCommand({
+		id: "system-eq.disengage",
+		title: "Disengage System EQ",
+		keywords: ["audio", "off", "stop"],
+		availableWhen: () => isSystemEqActive(),
+		run: async () => {
+			if (toggleEl) {
+				toggleEl.checked = false;
+				await onToggleChange();
+			} else {
+				await disengageSystemEq();
+			}
+		},
+	});
+	registerCommand({
+		id: "system-eq.wizard",
+		title: "System EQ — Run setup wizard",
+		keywords: ["onboarding", "blackhole", "first run"],
+		run: () => openSystemEqWizard(),
+	});
+	registerCommand({
+		id: "system-eq.switch-output",
+		title: "System EQ — Switch output device",
+		keywords: ["dac", "speakers", "headphones", "route", "output"],
+		run: async () => {
+			const outputs = await listAudioOutputs();
+			if (outputs.length === 0) {
+				toast("No output devices found.");
+				return;
+			}
+			const items = outputs.map((d) => ({
+				id: d.deviceId,
+				title: d.label || "Output (no label)",
+				subtitle: d.deviceId,
+			}));
+			const picked = await searchPickerModal(items, {
+				title: "Switch System EQ output",
+				placeholder: "Filter outputs",
+			});
+			if (picked) {
+				await setSystemEqOutput(picked);
+				const name = deviceLabels.get(picked) || "selected output";
+				toast(`Output set · ${name}`);
+				haptic(8);
+			}
+		},
+	});
 }
 
 // Auto-start preferences — persisted independently of systemEq.ts state

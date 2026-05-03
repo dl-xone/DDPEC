@@ -13,15 +13,44 @@ use tauri::{
     AppHandle, Manager, WindowEvent,
 };
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Cmd+Shift+E toggles System EQ from anywhere on the Mac. We dispatch
+    // the same engage/disengage events the dropdown emits so the main
+    // webview's existing handler does the work — Rust just routes the
+    // hotkey to the currently active state.
+    let toggle_shortcut = Shortcut::new(
+        Some(Modifiers::SUPER | Modifiers::SHIFT),
+        Code::KeyE,
+    );
+
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::AppleScript,
             None,
         ))
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_shortcut(toggle_shortcut)
+                .expect("DDPEC: failed to register System EQ toggle shortcut")
+                .with_handler(move |app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if shortcut == &toggle_shortcut {
+                        if let Some(main) = app.get_webview_window("main") {
+                            // The webview keeps its own truth about engagement.
+                            // We emit a "toggle" command and let it figure out
+                            // engage vs disengage based on current state.
+                            let _ = main.emit("ddpec:cmd:toggle", ());
+                        }
+                    }
+                })
+                .build(),
+        )
         .setup(|app| {
             setup_tray(&app.handle())?;
             // The dropdown window is created hidden; we only show it when

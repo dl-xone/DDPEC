@@ -448,10 +448,50 @@ export async function setSystemEqOutput(
 	preferences.outputDeviceId = deviceId;
 	persistPreferences();
 	if (graph) {
-		await applyOutputSink(graph.ctx, deviceId);
+		// Cross-fade through silence so the sink swap doesn't pop. ~80ms
+		// duck, swap, ~80ms unduck. The perceived latency is small enough
+		// that the user reads the swap as "instant" while their ears stay
+		// protected. Implemented on outputMix so the wet/dry topology
+		// stays put.
+		const ctx = graph.ctx;
+		const mix = graph.outputMix;
+		const now = ctx.currentTime;
+		const duck = 0.08;
+		mix.gain.cancelScheduledValues(now);
+		mix.gain.setValueAtTime(mix.gain.value, now);
+		mix.gain.linearRampToValueAtTime(0.0001, now + duck);
+		await applyOutputSink(ctx, deviceId);
+		const resumeAt = ctx.currentTime;
+		mix.gain.cancelScheduledValues(resumeAt);
+		mix.gain.setValueAtTime(0.0001, resumeAt);
+		mix.gain.linearRampToValueAtTime(1, resumeAt + duck);
 		log(`System EQ output → ${deviceId ?? "default"}.`);
 	}
 	broadcast();
+}
+
+// Pick a sensible default output device when the user hasn't chosen one.
+// Priority: connected USB DAC (DDPEC's existing dongle) → first labeled
+// non-default output → null (system default). Best-effort; returns null
+// if enumerateDevices throws or grants no labels.
+export async function pickSmartDefaultOutput(): Promise<string | null> {
+	const outputs = await listAudioOutputs();
+	if (outputs.length === 0) return null;
+	const device = getDevice();
+	const dongleHint = device?.productName?.toLowerCase() ?? "";
+	if (dongleHint) {
+		// Try to match a labeled output to the connected dongle's product
+		// name. macOS often prefixes with "USB" or echoes the manufacturer.
+		const matched = outputs.find(
+			(d) =>
+				d.label && dongleHint && d.label.toLowerCase().includes(dongleHint),
+		);
+		if (matched) return matched.deviceId;
+	}
+	const labeled = outputs.find(
+		(d) => d.label && !/default|communications/i.test(d.label),
+	);
+	return labeled?.deviceId ?? null;
 }
 
 export function setSystemEqLatency(latency: SystemEqLatency): void {

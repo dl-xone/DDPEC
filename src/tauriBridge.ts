@@ -18,6 +18,7 @@ import { log, setGlobalGain as setGlobalGainFromEvent } from "./helpers.ts";
 import {
 	disengageSystemEq,
 	engageSystemEq,
+	isSystemEqActive,
 	setSystemEqOutput,
 } from "./systemEq.ts";
 
@@ -100,6 +101,16 @@ export async function initTauriBridge(): Promise<void> {
 				await disengageSystemEq();
 			} catch (err) {
 				log(`System EQ: disengage from tray failed (${(err as Error).message})`);
+			}
+		});
+		// Cmd+Shift+E global hotkey — Rust emits this; we figure out which
+		// way to flip it based on current state.
+		await listen("ddpec:cmd:toggle", async () => {
+			try {
+				if (isSystemEqActive()) await disengageSystemEq();
+				else await engageSystemEq();
+			} catch (err) {
+				log(`System EQ: hotkey toggle failed (${(err as Error).message})`);
 			}
 		});
 		await listen<number>("ddpec:cmd:preamp", (event) => {

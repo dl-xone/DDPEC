@@ -9,6 +9,7 @@
 // shelling out.
 
 import { log, toast } from "./helpers.ts";
+import { playConfirmationTone } from "./systemEqConfirmTone.ts";
 import {
 	getSystemEqState,
 	listAudioInputs,
@@ -171,6 +172,11 @@ export function openSystemEqWizard(): void {
 				if (state.pickedInput) setSystemEqInput(state.pickedInput);
 				if (state.pickedOutput) void setSystemEqOutput(state.pickedOutput);
 				toast("System EQ ready");
+				// Brief 500 Hz tone so the user hears the routing work end-to-
+				// end. Runs only on wizard completion; subsequent engages stay
+				// silent. Fire-and-forget — we don't block dialog dismissal
+				// on tone playback.
+				void playConfirmationTone();
 				close(true);
 			}
 		});
