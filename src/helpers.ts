@@ -3,16 +3,31 @@ import { typeHasGain } from "./dsp/biquad.ts";
 import type { Band } from "./main.ts";
 
 /**
- * Console element
+ * Console element. Resolved lazily so this module can be imported from
+ * test environments that don't have a DOM (vitest default `node` env).
+ * Cached on first lookup; further calls re-resolve only if the cached
+ * element was detached.
  */
-const c = document.getElementById("logConsole") as HTMLElement;
+let _logConsole: HTMLElement | null | undefined;
+function getLogConsole(): HTMLElement | null {
+	if (typeof document === "undefined") return null;
+	if (_logConsole && _logConsole.isConnected) return _logConsole;
+	_logConsole = document.getElementById("logConsole") as HTMLElement | null;
+	return _logConsole;
+}
 
 /**
  * JDS pivot 2026-04-17 — "latest line" mirror shown in the collapsed log tray.
  * Every append to #logConsole also updates this so users see the most recent
- * event without expanding the tray.
+ * event without expanding the tray. Same lazy pattern as the console element.
  */
-const logTrayLatest = document.getElementById("logTrayLatest") as HTMLElement | null;
+let _logTrayLatest: HTMLElement | null | undefined;
+function getLogTrayLatest(): HTMLElement | null {
+	if (typeof document === "undefined") return null;
+	if (_logTrayLatest && _logTrayLatest.isConnected) return _logTrayLatest;
+	_logTrayLatest = document.getElementById("logTrayLatest") as HTMLElement | null;
+	return _logTrayLatest;
+}
 
 /**
  * Update global gain UI
@@ -74,6 +89,7 @@ export function enableControls(enabled: boolean) {
 const LOG_LINE_CAP = 500;
 export function log(msg: string) {
 	const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+	const c = getLogConsole();
 	if (c) {
 		const div = document.createElement("div");
 		div.textContent = line;
@@ -88,10 +104,7 @@ export function log(msg: string) {
 		}
 		c.scrollTop = c.scrollHeight;
 	}
-	// Mirror to the tray. Resolve lazily in case it was not present at
-	// module-load time (e.g. during a test harness).
-	const latest =
-		logTrayLatest ?? (document.getElementById("logTrayLatest") as HTMLElement | null);
+	const latest = getLogTrayLatest();
 	if (latest) latest.textContent = line;
 }
 

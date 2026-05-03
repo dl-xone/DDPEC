@@ -55,6 +55,14 @@ function broadcastDirty() {
 	}
 }
 
+// Per-edit broadcast. System EQ subscribes so its live audio graph reflects
+// band changes in real time; the dirty-change event above is too coarse
+// (only fires on the false→true transition, not every keystroke).
+function broadcastBandEdit() {
+	if (typeof document === "undefined") return;
+	document.dispatchEvent(new CustomEvent("ddpec:band-edit"));
+}
+
 // Feature 4 — "changed vs preset" dot. Snapshotting the loaded preset's
 // band tuple lets the canvas decorate bands the user has since edited.
 // Null means no preset is the baseline (fresh session or factory reset) —
@@ -147,6 +155,7 @@ export function setGlobalGainState(gain: number, opts?: SilentOpts) {
 	if (!opts?.silent) {
 		dirty[state.activeSlot] = true;
 		broadcastDirty();
+		broadcastBandEdit();
 	}
 }
 
@@ -159,6 +168,7 @@ export function setEqState(eq: EQ, opts?: SilentOpts) {
 	if (!opts?.silent) {
 		dirty[state.activeSlot] = true;
 		broadcastDirty();
+		broadcastBandEdit();
 	}
 }
 
@@ -173,6 +183,7 @@ export function setBandField(
 	state.slots[state.activeSlot].eq[index][key] = value;
 	dirty[state.activeSlot] = true;
 	broadcastDirty();
+	broadcastBandEdit();
 }
 
 // Append a band to the active slot. Caller is responsible for deciding the

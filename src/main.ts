@@ -19,6 +19,7 @@ import { importProfile } from "./importExport.ts";
 import { initEmptyStateCard } from "./emptyStateCard.ts";
 import { selectBandByPosition } from "./peq.ts";
 import { getActiveSlot } from "./state.ts";
+import * as systemEqModule from "./systemEq.ts";
 
 // Polite live region — screen readers announce band selections + edits
 // without stealing focus from the canvas. Single node, reused; updates
@@ -82,6 +83,19 @@ initState();
 // (mode buttons, tabs, log tray) already exists in the DOM.
 initSession();
 initEmptyStateCard();
+
+// System EQ — wire up the band-edit / eq-toggle listeners so the live
+// audio graph (when engaged) reflects user edits. Phase 1 also exposes
+// the module on window for console-driven verification before the proper
+// UI lands in Phase 2. Console flow:
+//   await window.ddpecSystemEq.listAudioInputs()
+//   window.ddpecSystemEq.setSystemEqInput("<deviceId>")
+//   window.ddpecSystemEq.setSystemEqOutput("<deviceId>")
+//   await window.ddpecSystemEq.engageSystemEq()
+//   await window.ddpecSystemEq.disengageSystemEq()
+systemEqModule.initSystemEqListeners();
+(window as unknown as { ddpecSystemEq?: typeof systemEqModule }).ddpecSystemEq =
+	systemEqModule;
 
 /**
  * Helper: dynamically import a named export from fn.ts and call it.
