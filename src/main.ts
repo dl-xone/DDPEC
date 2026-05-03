@@ -20,6 +20,8 @@ import { selectBandByPosition } from "./peq.ts";
 import { getActiveSlot } from "./state.ts";
 import * as systemEqModule from "./systemEq.ts";
 import { initSystemEqUi } from "./systemEqUi.ts";
+import { initTauriBridge } from "./tauriBridge.ts";
+import { maybeShowWizardOnFirstRun } from "./wizardSystemEq.ts";
 import { initTheme } from "./theme.ts";
 
 // Polite live region — screen readers announce band selections + edits
@@ -101,6 +103,8 @@ initEmptyStateCard();
 //   await window.ddpecSystemEq.disengageSystemEq()
 systemEqModule.initSystemEqListeners();
 initSystemEqUi();
+maybeShowWizardOnFirstRun();
+void initTauriBridge();
 (window as unknown as { ddpecSystemEq?: typeof systemEqModule }).ddpecSystemEq =
 	systemEqModule;
 

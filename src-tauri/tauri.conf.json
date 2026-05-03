@@ -1,0 +1,68 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DDPEC",
+  "version": "0.3.0",
+  "identifier": "app.ddpec",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "DDPEC",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 880,
+        "minHeight": 560,
+        "decorations": true,
+        "transparent": false,
+        "hiddenTitle": false,
+        "titleBarStyle": "Visible"
+      },
+      {
+        "label": "dropdown",
+        "url": "dropdown.html",
+        "title": "System EQ",
+        "width": 280,
+        "height": 280,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": true,
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "tooltip": "DDPEC — System EQ"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ],
+    "category": "Utility",
+    "shortDescription": "Parametric EQ for USB DAC dongles + macOS System EQ",
+    "longDescription": "DDPEC writes parametric EQ coefficients to FiiO / Moondrop / Walkplay USB DAC dongles via WebHID, and applies the same tuning to macOS system audio via BlackHole."
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "autostart": {
+      "macosLauncher": "AppleScript"
+    }
+  }
+}

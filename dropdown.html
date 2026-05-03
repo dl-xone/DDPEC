@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="theme-color" content="#cf4863"/>
+  <title>System EQ</title>
+</head>
+
+<body class="font-sans bg-surface-0 text-text-1 m-0 p-0 system-eq-dropdown-body">
+  <!-- Compact menubar panel rendered by Tauri's tray window. Mirrors the
+       visual language of the main popover but at a denser layout. The
+       3px level strip at top breathes with audio when System EQ is
+       engaged in the main window (Phase 6 wires the IPC; Phase 4 reads
+       preferences from localStorage). -->
+  <div id="dropdownLevelStrip" class="system-eq-level-strip" aria-hidden="true"></div>
+
+  <main class="system-eq-dropdown">
+    <header class="system-eq-dropdown-head">
+      <span class="system-eq-dropdown-brand">
+        <span class="system-eq-dropdown-brand-dot"></span>
+        DDPEC
+      </span>
+      <label class="switch" title="Toggle System EQ">
+        <input type="checkbox" id="dropdownToggle" />
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <div class="system-eq-dropdown-status" id="dropdownStatus">
+      System EQ off
+    </div>
+
+    <div class="system-eq-dropdown-row">
+      <span class="system-eq-popover-label">Output</span>
+      <span class="system-eq-dropdown-value" id="dropdownOutput">—</span>
+    </div>
+    <div class="system-eq-dropdown-row">
+      <span class="system-eq-popover-label">Preset</span>
+      <span class="system-eq-dropdown-value" id="dropdownPreset">—</span>
+    </div>
+    <div class="system-eq-dropdown-row">
+      <span class="system-eq-popover-label">Pre-amp</span>
+      <input type="range" id="dropdownPreamp" class="system-eq-popover-slider" min="-20" max="10" step="1" value="0" disabled />
+      <span class="system-eq-dropdown-value" id="dropdownPreampLabel">0 dB</span>
+    </div>
+
+    <footer class="system-eq-dropdown-footer">
+      <button type="button" id="dropdownOpenEditor" class="system-eq-dropdown-open">
+        Open editor
+        <span aria-hidden="true">→</span>
+      </button>
+    </footer>
+  </main>
+
+  <script type="module" src="/src/dropdown.ts"></script>
+</body>
+
+</html>

@@ -10,10 +10,14 @@
 		"test:watch": "vitest",
 		"format": "npx @biomejs/biome check --write",
 		"preview": "vite preview",
-		"generate-icons": "node scripts/generate-pwa-icons.mjs"
+		"generate-icons": "node scripts/generate-pwa-icons.mjs",
+		"tauri": "tauri",
+		"tauri:dev": "tauri dev",
+		"tauri:build": "tauri build"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.11",
+		"@tauri-apps/cli": "^2.0.0",
 		"@types/w3c-web-hid": "^1.0.6",
 		"typescript": "~5.9.3",
 		"vite": "^7.2.4",
@@ -22,6 +26,9 @@
 	},
 	"dependencies": {
 		"@tailwindcss/vite": "^4.1.18",
+		"@tauri-apps/api": "^2.0.0",
+		"@tauri-apps/plugin-autostart": "^2.0.0",
+		"@tauri-apps/plugin-shell": "^2.0.0",
 		"tailwindcss": "^4.1.18"
 	}
 }

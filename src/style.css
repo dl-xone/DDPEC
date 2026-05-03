@@ -453,6 +453,249 @@ button.btn-icon:focus-visible {
 	display: none;
 }
 
+/* Menubar dropdown — compact panel rendered by Tauri's tray window
+   (or /dropdown.html in browser preview). Same density rules as the
+   main popover; level strip at the very top is the "alive" signal. */
+.system-eq-dropdown-body {
+	background: var(--color-surface-1);
+	width: 280px;
+	min-height: 280px;
+	color: var(--color-text-1);
+}
+.system-eq-dropdown {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 16px 18px 14px;
+}
+.system-eq-dropdown-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+}
+.system-eq-dropdown-brand {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-weight: 600;
+	font-size: 13px;
+	letter-spacing: 0.04em;
+}
+.system-eq-dropdown-brand-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--color-accent);
+	box-shadow: 0 0 6px var(--color-accent);
+}
+.system-eq-dropdown-status {
+	font-size: 11px;
+	color: var(--color-text-3);
+	line-height: 1.4;
+	border-bottom: 1px solid var(--color-border);
+	padding-bottom: 10px;
+}
+.system-eq-dropdown-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.system-eq-dropdown-value {
+	flex: 1;
+	font-size: 12px;
+	color: var(--color-text-1);
+	text-align: right;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.system-eq-dropdown-footer {
+	margin-top: auto;
+	padding-top: 12px;
+	border-top: 1px solid var(--color-border);
+}
+.system-eq-dropdown-open {
+	width: 100%;
+	background: transparent;
+	border: 0;
+	color: var(--color-text-1);
+	font-size: 13px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 0;
+	cursor: pointer;
+	border-radius: 4px;
+	transition: background 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.system-eq-dropdown-open:hover {
+	background: var(--color-surface-3);
+	padding: 8px 10px;
+}
+
+/* System EQ first-run wizard. Modal dialog with three steps: BlackHole
+   install → system audio routing → DDPEC output. Each step shows current
+   vs target state in a side-by-side grid so progress is unambiguous. */
+.system-eq-wizard {
+	background: var(--color-surface-2);
+	color: var(--color-text-1);
+	border: 1px solid var(--color-border-strong);
+	border-radius: 10px;
+	padding: 0;
+	width: 480px;
+	max-width: 92vw;
+	box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+}
+.system-eq-wizard::backdrop {
+	background: rgba(0, 0, 0, 0.55);
+}
+.system-eq-wizard-head {
+	padding: 20px 24px 12px;
+	border-bottom: 1px solid var(--color-border);
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+.system-eq-wizard-stepnum {
+	font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+	font-size: 9px;
+	letter-spacing: 0.2em;
+	text-transform: uppercase;
+	color: var(--color-text-3);
+}
+.system-eq-wizard-title {
+	font-size: 18px;
+	font-weight: 600;
+	color: var(--color-text-1);
+	margin: 0;
+}
+.system-eq-wizard-progress {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+}
+.system-eq-wizard-dot {
+	width: 28px;
+	height: 3px;
+	border-radius: 2px;
+	background: var(--color-surface-4);
+	transition: background 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.system-eq-wizard-dot.is-current {
+	background: var(--color-accent);
+}
+.system-eq-wizard-dot.is-done {
+	background: var(--color-accent-dim);
+}
+.system-eq-wizard-body {
+	padding: 18px 24px;
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	min-height: 180px;
+}
+.system-eq-wizard-desc {
+	font-size: 13px;
+	color: var(--color-text-2);
+	line-height: 1.5;
+	margin: 0;
+}
+.system-eq-wizard-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	background: var(--color-surface-3);
+	border-radius: 6px;
+	padding: 8px 12px;
+	font-size: 12px;
+	color: var(--color-text-1);
+}
+.system-eq-wizard-status-icon {
+	display: inline-block;
+	min-width: 18px;
+	text-align: center;
+	font-weight: 600;
+}
+.system-eq-wizard-status-icon.is-ok {
+	color: var(--color-success);
+}
+.system-eq-wizard-status-icon.is-pending {
+	color: var(--color-text-3);
+}
+.system-eq-wizard-actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+.system-eq-wizard-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 10px;
+}
+.system-eq-wizard-grid-cell {
+	background: var(--color-surface-3);
+	border: 1px solid var(--color-border);
+	border-radius: 6px;
+	padding: 10px 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.system-eq-wizard-cell-label {
+	font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+	font-size: 9px;
+	letter-spacing: 0.2em;
+	text-transform: uppercase;
+	color: var(--color-text-3);
+}
+.system-eq-wizard-cell-value {
+	font-size: 12px;
+	color: var(--color-text-1);
+	line-height: 1.4;
+}
+.system-eq-wizard-cell-value.is-target {
+	color: var(--color-accent);
+	font-weight: 600;
+}
+.system-eq-wizard-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.system-eq-wizard-row-label {
+	font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+	font-size: 9px;
+	letter-spacing: 0.2em;
+	text-transform: uppercase;
+	color: var(--color-text-3);
+	min-width: 56px;
+}
+.system-eq-wizard-footer {
+	padding: 14px 20px;
+	border-top: 1px solid var(--color-border);
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.system-eq-wizard-skip {
+	background: transparent;
+	border: 0;
+	color: var(--color-text-3);
+	font-size: 12px;
+	cursor: pointer;
+	padding: 6px 10px;
+	border-radius: 4px;
+}
+.system-eq-wizard-skip:hover {
+	color: var(--color-text-2);
+	background: var(--color-surface-3);
+}
+.system-eq-wizard-nav {
+	display: flex;
+	gap: 8px;
+}
+
 /* Audio-reactive header level strip. 2px tall, flush below the header
    border. Off (no audio) = invisible (height collapses to 0 so the layout
    doesn't shift). On = fades to full opacity, gradient fill driven by

@@ -33,6 +33,9 @@ import {
 	setSystemEqLatency,
 	setSystemEqOutput,
 } from "./systemEq.ts";
+import { openSystemEqWizard } from "./wizardSystemEq.ts";
+
+const AUTO_START_KEY = "ddpec.systemEq.autoStart";
 
 const LATENCY_VALUES: SystemEqLatency[] = ["tight", "balanced", "comfortable"];
 const LATENCY_LABELS: Record<SystemEqLatency, string> = {
@@ -54,6 +57,8 @@ let doubleEqChipEl: HTMLElement | null = null;
 let inputHintEl: HTMLElement | null = null;
 let outputHintEl: HTMLElement | null = null;
 let levelStripEl: HTMLElement | null = null;
+let autoStartSwitchEl: HTMLInputElement | null = null;
+let wizardBtnEl: HTMLButtonElement | null = null;
 
 // Cache of recently enumerated devices, keyed by id. Used to render the
 // pill suffix ("System EQ · AKLite") without re-enumerating on every
@@ -82,9 +87,27 @@ export function initSystemEqUi(): void {
 	inputHintEl = document.getElementById("systemEqInputHint");
 	outputHintEl = document.getElementById("systemEqOutputHint");
 	levelStripEl = document.getElementById("systemEqLevelStrip");
+	autoStartSwitchEl = document.getElementById(
+		"systemEqAutoStartSwitch",
+	) as HTMLInputElement | null;
+	wizardBtnEl = document.getElementById(
+		"btnSystemEqWizard",
+	) as HTMLButtonElement | null;
 
 	if (!pillEl || !popoverEl) return; // markup absent — bail silently
 	initialized = true;
+
+	// Device Settings → System EQ section: auto-start toggle + wizard button.
+	if (autoStartSwitchEl) {
+		autoStartSwitchEl.checked = getAutoStartPreference();
+		autoStartSwitchEl.addEventListener("change", () => {
+			const on = !!autoStartSwitchEl?.checked;
+			setAutoStartPreference(on);
+			void applyAutoStartToTauri(on);
+			toast(on ? "Auto-start enabled" : "Auto-start disabled");
+		});
+	}
+	wizardBtnEl?.addEventListener("click", () => openSystemEqWizard());
 
 	// Audio-reactive surfaces — header level strip and pill device label
 	// share the audioReactive tick stream. Pill breathing animation runs
@@ -335,6 +358,51 @@ function updateLevelStrip(): void {
 	// reading as a glow rather than a blocky bar.
 	const intensity = Math.min(0.85, Math.sqrt(rms));
 	levelStripEl.style.setProperty("--system-eq-level", intensity.toFixed(3));
+}
+
+// Auto-start preferences — persisted independently of systemEq.ts state
+// since Tauri's autostart plugin owns the actual OS-level Login Item
+// registration. The web side just records the user's preference and
+// forwards it via the Tauri bridge below; in browser mode the bridge
+// is a no-op.
+function getAutoStartPreference(): boolean {
+	if (typeof localStorage === "undefined") return false;
+	return localStorage.getItem(AUTO_START_KEY) === "1";
+}
+
+function setAutoStartPreference(on: boolean): void {
+	if (typeof localStorage === "undefined") return;
+	if (on) localStorage.setItem(AUTO_START_KEY, "1");
+	else localStorage.removeItem(AUTO_START_KEY);
+}
+
+interface AutoStartPlugin {
+	enable: () => Promise<void>;
+	disable: () => Promise<void>;
+	isEnabled: () => Promise<boolean>;
+}
+
+// Apply the user's auto-start preference to the running Tauri shell.
+// Browser mode: skipped (no plugin available). Tauri mode: invokes
+// tauri-plugin-autostart's `enable` / `disable`. Failures are logged
+// but don't block the toggle — the preference is stored either way.
+async function applyAutoStartToTauri(enable: boolean): Promise<void> {
+	const w = window as unknown as {
+		__TAURI_INTERNALS__?: unknown;
+		ddpecTauriAutoStart?: AutoStartPlugin;
+	};
+	if (!w.__TAURI_INTERNALS__) return; // running in plain browser
+	const plugin = w.ddpecTauriAutoStart;
+	if (!plugin) {
+		log("System EQ: Tauri auto-start plugin not bound; preference saved only.");
+		return;
+	}
+	try {
+		if (enable) await plugin.enable();
+		else await plugin.disable();
+	} catch (err) {
+		log(`System EQ: auto-start ${enable ? "enable" : "disable"} failed (${(err as Error).message})`);
+	}
 }
 
 // Public hook for Phase 5 — drift detector and double-EQ detector flip

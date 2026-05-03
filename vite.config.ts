@@ -55,5 +55,34 @@ export default defineConfig(async () => {
 	return {
 		plugins: [tailwindcss(), ...(pwa ? [pwa] : [])],
 		base: process.env.VITE_BASE ?? "/",
+		build: {
+			rollupOptions: {
+				// Two HTML entry points: the main DDPEC editor (index.html) and
+				// the compact menubar panel (dropdown.html). Tauri's tray window
+				// loads /dropdown.html; the browser preview can hit it directly
+				// at /dropdown.html for development.
+				input: {
+					main: "index.html",
+					dropdown: "dropdown.html",
+				},
+				// Tauri runtime injects @tauri-apps/* via the webview at run
+				// time. We mark them external so Vite/Rollup don't try to
+				// resolve them in a non-Tauri build (browser PWA). The
+				// tauriBridge module dynamically imports them and gracefully
+				// falls back when they're unavailable.
+				external: [
+					/^@tauri-apps\//,
+				],
+			},
+		},
+		optimizeDeps: {
+			exclude: [
+				"@tauri-apps/api",
+				"@tauri-apps/api/core",
+				"@tauri-apps/api/event",
+				"@tauri-apps/plugin-autostart",
+				"@tauri-apps/plugin-shell",
+			],
+		},
 	};
 });

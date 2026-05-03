@@ -215,6 +215,23 @@
     </section>
 
     <section>
+      <h3 class="sidebar-head">System EQ</h3>
+      <div class="flex items-center justify-between gap-4 mb-2">
+        <label class="flex items-center gap-3 text-xs text-text-1">
+          <span class="switch" title="Auto-start at login">
+            <input type="checkbox" id="systemEqAutoStartSwitch" />
+            <span class="slider"></span>
+          </span>
+          <span>Start System EQ menubar at macOS login</span>
+        </label>
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-xs text-text-3">First-run setup</span>
+        <button type="button" id="btnSystemEqWizard" class="btn-ghost text-xs">Run wizard…</button>
+      </div>
+    </section>
+
+    <section>
       <h3 class="sidebar-head">Reset</h3>
       <button type="button" id="btnFactoryReset" class="btn-outline intent-danger self-start">Reset all EQ slots to defaults</button>
     </section>
