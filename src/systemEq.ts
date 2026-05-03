@@ -25,7 +25,12 @@
 import { setAudioReactiveAnalyser } from "./audioReactive.ts";
 import { log } from "./helpers.ts";
 import type { Band } from "./main.ts";
-import { getEqState, getGlobalGainState, isEqEnabled } from "./state.ts";
+import {
+	getEqState,
+	getGlobalGainState,
+	isEqEnabled,
+	getDevice,
+} from "./state.ts";
 
 export type SystemEqLatency = "tight" | "balanced" | "comfortable";
 
@@ -57,6 +62,9 @@ interface SystemEqGraph {
 	outputMix: GainNode;
 	analyser: AnalyserNode;
 	stream: MediaStream;
+	engagedAt: number;
+	driftCheckTimer: number | null;
+	statechangeHandler: (() => void) | null;
 }
 
 let graph: SystemEqGraph | null = null;
@@ -132,6 +140,23 @@ function broadcast(): void {
 		new CustomEvent(EVENT_NAME, {
 			detail: { ...preferences, active: graph !== null },
 		}),
+	);
+}
+
+const DRIFT_EVENT_NAME = "ddpec:system-eq-drift";
+const DOUBLE_EQ_EVENT_NAME = "ddpec:system-eq-double";
+
+function broadcastDrift(active: boolean): void {
+	if (typeof document === "undefined") return;
+	document.dispatchEvent(
+		new CustomEvent(DRIFT_EVENT_NAME, { detail: { drift: active } }),
+	);
+}
+
+function broadcastDoubleEq(active: boolean): void {
+	if (typeof document === "undefined") return;
+	document.dispatchEvent(
+		new CustomEvent(DOUBLE_EQ_EVENT_NAME, { detail: { doubleEq: active } }),
 	);
 }
 
@@ -273,12 +298,41 @@ export async function engageSystemEq(): Promise<void> {
 		outputMix,
 		analyser,
 		stream,
+		engagedAt: performance.now(),
+		driftCheckTimer: null,
+		statechangeHandler: null,
 	};
 
 	// Pump the analyser into the shared audio-reactive substrate so the
 	// band-point pulse, header level strip, and tray glow all read from
 	// the same FFT once per frame.
 	setAudioReactiveAnalyser(analyser);
+
+	// Sleep/wake recovery — when macOS sleeps the AudioContext flips to
+	// "interrupted"; on wake it goes back to "running" if we resume() it.
+	// Without this hook, audio stops after the first sleep until the user
+	// manually re-engages. Listener removed on disengage.
+	const onStateChange = (): void => {
+		if (!graph || graph.ctx !== ctx) return;
+		if (ctx.state === "interrupted") {
+			log("System EQ: AudioContext interrupted (likely sleep); will resume on wake.");
+		} else if (ctx.state === "suspended") {
+			void ctx.resume().catch((err) => {
+				log(`System EQ: resume failed (${(err as Error).message})`);
+			});
+		}
+	};
+	ctx.addEventListener("statechange", onStateChange);
+	graph.statechangeHandler = onStateChange;
+
+	// Drift check — 1.5s after engaging, sample whether audio is actually
+	// flowing. If RMS is still ~0, the input isn't receiving anything,
+	// which usually means the user's system output isn't routed through
+	// BlackHole. Surface the drift state so the UI can prompt a fix.
+	graph.driftCheckTimer = window.setTimeout(() => {
+		if (!graph) return;
+		runDriftCheck();
+	}, 1500);
 
 	// Watch for the input track ending (device unplugged, OS audio reset).
 	// Disengage gracefully so the UI can react and the user gets a clear
@@ -296,12 +350,34 @@ export async function engageSystemEq(): Promise<void> {
 		}, latency=${preferences.latency}).`,
 	);
 	broadcast();
+	// Initial double-EQ check after engage so the warning chip appears
+	// immediately if the user already has dongle bands dialled in.
+	runDoubleEqCheck();
 }
 
 export async function disengageSystemEq(): Promise<void> {
 	if (!graph) return;
 	const g = graph;
 	graph = null;
+
+	// Cancel the pending drift check, if any. Detach the statechange
+	// listener so we don't leak event-loop ticks across re-engagements.
+	if (g.driftCheckTimer !== null && typeof window !== "undefined") {
+		window.clearTimeout(g.driftCheckTimer);
+	}
+	if (driftPollHandle !== null && typeof window !== "undefined") {
+		window.clearTimeout(driftPollHandle);
+		driftPollHandle = null;
+	}
+	if (g.statechangeHandler) {
+		try {
+			g.ctx.removeEventListener("statechange", g.statechangeHandler);
+		} catch {
+			// already removed
+		}
+	}
+	broadcastDrift(false);
+	broadcastDoubleEq(false);
 
 	// Tear down the audio-reactive feed first so its RAF loop stops before
 	// we close the context (otherwise the next frame would try to read from
@@ -440,8 +516,78 @@ export function initSystemEqListeners(): void {
 	if (listenersBound) return;
 	if (typeof document === "undefined") return;
 	listenersBound = true;
-	document.addEventListener("ddpec:band-edit", () => refreshSystemEqGraph());
-	document.addEventListener("ddpec:eq-toggled", () => refreshSystemEqGraph());
+	document.addEventListener("ddpec:band-edit", () => {
+		refreshSystemEqGraph();
+		runDoubleEqCheck();
+	});
+	document.addEventListener("ddpec:eq-toggled", () => {
+		refreshSystemEqGraph();
+		runDoubleEqCheck();
+	});
+
+	// Visibility-change recovery — Chromium suspends AudioContext on
+	// background tabs in some configurations. Resume on visible if the
+	// state is suspended; the statechange handler in engage() handles
+	// the "interrupted" case from system sleep.
+	document.addEventListener("visibilitychange", () => {
+		if (!graph) return;
+		if (document.visibilityState !== "visible") return;
+		if (graph.ctx.state === "suspended") {
+			void graph.ctx.resume().catch((err) => {
+				log(`System EQ: resume on visibility change failed (${(err as Error).message})`);
+			});
+		}
+	});
+}
+
+// Drift detection — compares the post-engagement RMS to a silence floor.
+// If still ~0 a couple of seconds in, the input device isn't actually
+// receiving anything, which usually means the macOS system output isn't
+// routed through BlackHole. We surface the drift state via an event so
+// systemEqUi.ts can flip the pill colour without having to know about
+// the Web Audio analyser. Re-runs every 4s while engaged to catch
+// late-emerging routing changes (user unplugged BlackHole, etc.).
+let driftPollHandle: number | null = null;
+function runDriftCheck(): void {
+	if (!graph) return;
+	const analyser = graph.analyser;
+	const buffer = new Float32Array(analyser.fftSize);
+	analyser.getFloatTimeDomainData(buffer);
+	let sumSquares = 0;
+	for (let i = 0; i < buffer.length; i++) sumSquares += buffer[i] * buffer[i];
+	const rms = Math.sqrt(sumSquares / buffer.length);
+	// -55 dBFS floor matches the audioReactive silence threshold so the
+	// drift detector and the level-strip "alive" indicator agree on what
+	// counts as silent.
+	const SILENCE_LINEAR = 10 ** (-55 / 20);
+	const isDrift = rms < SILENCE_LINEAR;
+	broadcastDrift(isDrift);
+
+	// Schedule the next poll. Slow cadence (4s) keeps us out of the way of
+	// the audio-reactive RAF; drift state doesn't need millisecond accuracy.
+	if (typeof window !== "undefined") {
+		if (driftPollHandle !== null) window.clearTimeout(driftPollHandle);
+		driftPollHandle = window.setTimeout(runDriftCheck, 4000);
+	}
+}
+
+// Double-EQ detection — when System EQ is engaged AND a dongle is
+// connected with non-flat coefficients, we're applying EQ twice. Surface
+// the warning chip so the user can flatten the dongle (or accept the
+// stack). Recomputed on every band edit + on toggle changes so the chip
+// flips quickly when the user fixes it.
+function runDoubleEqCheck(): void {
+	const device = getDevice();
+	if (!graph || !device) {
+		broadcastDoubleEq(false);
+		return;
+	}
+	const bands = getEqState();
+	const hasNonFlatBand = bands.some(
+		(b) => b.enabled && Math.abs(b.gain) > 0.01,
+	);
+	const hasNonZeroPreamp = Math.abs(getGlobalGainState()) > 0.01;
+	broadcastDoubleEq(hasNonFlatBand || hasNonZeroPreamp);
 }
 
 export async function listAudioInputs(): Promise<MediaDeviceInfo[]> {

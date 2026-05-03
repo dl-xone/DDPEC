@@ -134,6 +134,14 @@ export function initSystemEqUi(): void {
 	latencySliderEl?.addEventListener("input", onLatencyChange);
 
 	document.addEventListener("ddpec:system-eq-change", () => refreshUi());
+	document.addEventListener("ddpec:system-eq-drift", (e) => {
+		const detail = (e as CustomEvent<{ drift: boolean }>).detail;
+		setSystemEqDrift(!!detail?.drift);
+	});
+	document.addEventListener("ddpec:system-eq-double", (e) => {
+		const detail = (e as CustomEvent<{ doubleEq: boolean }>).detail;
+		setSystemEqDoubleEqWarning(!!detail?.doubleEq);
+	});
 	document.addEventListener("click", onDocumentClick);
 	document.addEventListener("keydown", (e) => {
 		if (e.key === "Escape" && isPopoverOpen()) hidePopover();
