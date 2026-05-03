@@ -59,7 +59,7 @@ interface SystemEqGraph {
 }
 
 let graph: SystemEqGraph | null = null;
-let preferences: SystemEqState = loadPreferences();
+const preferences: SystemEqState = loadPreferences();
 
 // Map DDPEC's internal filter type tokens to Web Audio's BiquadFilterType.
 // Matches the table already used by `buildEqChain()` in signals.ts so a
@@ -96,10 +96,15 @@ function loadPreferences(): SystemEqState {
 			// Persisted `active: true` from a previous session would otherwise
 			// silently grab the microphone permission on next page load.
 			active: false,
-			inputDeviceId: typeof parsed.inputDeviceId === "string" ? parsed.inputDeviceId : null,
+			inputDeviceId:
+				typeof parsed.inputDeviceId === "string" ? parsed.inputDeviceId : null,
 			outputDeviceId:
-				typeof parsed.outputDeviceId === "string" ? parsed.outputDeviceId : null,
-			latency: isValidLatency(parsed.latency) ? parsed.latency : DEFAULT_LATENCY,
+				typeof parsed.outputDeviceId === "string"
+					? parsed.outputDeviceId
+					: null,
+			latency: isValidLatency(parsed.latency)
+				? parsed.latency
+				: DEFAULT_LATENCY,
 		};
 	} catch {
 		return fallback;
@@ -123,7 +128,9 @@ function persistPreferences(): void {
 function broadcast(): void {
 	if (typeof document === "undefined") return;
 	document.dispatchEvent(
-		new CustomEvent(EVENT_NAME, { detail: { ...preferences, active: graph !== null } }),
+		new CustomEvent(EVENT_NAME, {
+			detail: { ...preferences, active: graph !== null },
+		}),
 	);
 }
 
@@ -159,9 +166,11 @@ async function applyOutputSink(
 	outputDeviceId: string | null,
 ): Promise<void> {
 	if (!outputDeviceId) return;
-	const setSinkId = (ctx as unknown as {
-		setSinkId?: (id: string) => Promise<void>;
-	}).setSinkId;
+	const setSinkId = (
+		ctx as unknown as {
+			setSinkId?: (id: string) => Promise<void>;
+		}
+	).setSinkId;
 	if (typeof setSinkId !== "function") return;
 	try {
 		await setSinkId.call(ctx, outputDeviceId);
@@ -177,8 +186,13 @@ export async function engageSystemEq(): Promise<void> {
 	if (!preferences.inputDeviceId) {
 		throw new Error("System EQ: no input device selected.");
 	}
-	if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-		throw new Error("System EQ: getUserMedia not available in this environment.");
+	if (
+		typeof navigator === "undefined" ||
+		!navigator.mediaDevices?.getUserMedia
+	) {
+		throw new Error(
+			"System EQ: getUserMedia not available in this environment.",
+		);
 	}
 
 	// Acquire the input stream with every browser-side DSP enhancement
@@ -341,7 +355,9 @@ export function setSystemEqInput(deviceId: string | null): void {
 	// that in the UI rather than tearing down on a setting flip.
 }
 
-export async function setSystemEqOutput(deviceId: string | null): Promise<void> {
+export async function setSystemEqOutput(
+	deviceId: string | null,
+): Promise<void> {
 	preferences.outputDeviceId = deviceId;
 	persistPreferences();
 	if (graph) {
@@ -418,7 +434,10 @@ export function initSystemEqListeners(): void {
 }
 
 export async function listAudioInputs(): Promise<MediaDeviceInfo[]> {
-	if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+	if (
+		typeof navigator === "undefined" ||
+		!navigator.mediaDevices?.enumerateDevices
+	) {
 		return [];
 	}
 	try {
@@ -430,7 +449,10 @@ export async function listAudioInputs(): Promise<MediaDeviceInfo[]> {
 }
 
 export async function listAudioOutputs(): Promise<MediaDeviceInfo[]> {
-	if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+	if (
+		typeof navigator === "undefined" ||
+		!navigator.mediaDevices?.enumerateDevices
+	) {
 		return [];
 	}
 	try {

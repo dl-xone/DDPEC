@@ -25,6 +25,11 @@
       <span id="statusText">Disconnected</span>
       <span id="deviceName"></span>
     </span>
+    <button id="systemEqPill" type="button" class="system-eq-pill" data-state="off" aria-haspopup="dialog" aria-expanded="false" aria-pressed="false" title="System EQ — apply tuning to system audio">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="system-eq-label">System EQ</span>
+      <span id="systemEqPillDevice" class="system-eq-pill-device" hidden></span>
+    </button>
     <button id="btnConnect" class="btn-primary">Connect</button>
     <nav class="flex items-center gap-0 ml-3" role="tablist" aria-label="Primary">
       <button type="button" id="navTabDsp" class="nav-tab active" role="tab" aria-selected="true" title="DSP Settings (press ? for shortcuts)">
@@ -226,6 +231,47 @@
 <div id="logConsole" class="log-console px-6 py-2 text-[10px] font-mono text-text-3 overflow-y-auto max-h-[120px] border-t border-border hidden">
   <button type="button" id="btnLogClear" class="log-clear" title="Clear log">Clear</button>
   Ready to connect...
+</div>
+
+<!-- System EQ — popover anchored to #systemEqPill in the header. Hidden by
+     default; toggled via systemEqUi.ts. Sits at body level so it floats above
+     the main layout regardless of which pane is active. -->
+<div id="systemEqPopover" class="system-eq-popover" role="dialog" aria-label="System EQ controls" hidden>
+  <div class="system-eq-popover-head">
+    <span class="system-eq-popover-title">System EQ</span>
+    <label class="switch" title="Toggle System EQ">
+      <input type="checkbox" id="systemEqToggle" />
+      <span class="slider"></span>
+    </label>
+  </div>
+  <p class="system-eq-popover-desc">
+    Captures audio from a chosen input, applies your tuning, and routes to a chosen output.
+    Doesn't touch the dongle.
+  </p>
+  <div class="system-eq-popover-row">
+    <label class="system-eq-popover-label" for="systemEqInputSelect">Source</label>
+    <select id="systemEqInputSelect" class="system-eq-popover-select" aria-describedby="systemEqInputHint">
+      <option value="">— pick a source —</option>
+    </select>
+  </div>
+  <div id="systemEqInputHint" class="system-eq-popover-hint" hidden></div>
+  <div class="system-eq-popover-row">
+    <label class="system-eq-popover-label" for="systemEqOutputSelect">Output</label>
+    <select id="systemEqOutputSelect" class="system-eq-popover-select" aria-describedby="systemEqOutputHint">
+      <option value="">— system default —</option>
+    </select>
+  </div>
+  <div id="systemEqOutputHint" class="system-eq-popover-hint" hidden></div>
+  <details class="system-eq-popover-advanced">
+    <summary>Advanced</summary>
+    <div class="system-eq-popover-row">
+      <label class="system-eq-popover-label" for="systemEqLatencySlider">Latency</label>
+      <input type="range" id="systemEqLatencySlider" min="0" max="2" step="1" value="2" class="system-eq-popover-slider" aria-describedby="systemEqLatencyLabel" />
+    </div>
+    <div id="systemEqLatencyLabel" class="system-eq-popover-hint">Comfortable  ~30–50ms</div>
+    <p class="system-eq-popover-hint">Re-engage System EQ for latency changes to take effect.</p>
+  </details>
+  <div id="systemEqDoubleEqChip" class="chip-double-eq" hidden>⚠ Possible double-EQ — dongle has non-flat coefficients</div>
 </div>
 
 <script type="module" src="/src/main.ts"></script>

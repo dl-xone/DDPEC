@@ -260,6 +260,199 @@ button.btn-icon:focus-visible {
 	color: var(--color-text-3);
 }
 
+/* System EQ pill — same shape and rhythm as .status-pill so the header reads
+   as a row of equally-weighted state indicators. Off state is a quiet
+   outlined pill; on state fills with the accent dim and the dot breathes. */
+.system-eq-pill {
+	@apply inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full text-[11px] font-semibold;
+	background: transparent;
+	border: 1px solid var(--color-border-strong);
+	color: var(--color-text-2);
+	cursor: pointer;
+	transition: background 180ms cubic-bezier(0.16, 1, 0.3, 1),
+		border-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+		color 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.system-eq-pill:hover {
+	border-color: var(--color-text-3);
+	color: var(--color-text-1);
+}
+.system-eq-pill .dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--color-text-3);
+	transition: background 180ms cubic-bezier(0.16, 1, 0.3, 1),
+		box-shadow 180ms cubic-bezier(0.16, 1, 0.3, 1),
+		transform 100ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.system-eq-pill.is-active {
+	background: var(--color-accent-dim);
+	border-color: var(--color-accent);
+	color: var(--color-accent);
+}
+.system-eq-pill.is-active .dot {
+	background: var(--color-accent);
+	box-shadow: 0 0 6px var(--color-accent);
+	animation: system-eq-breath 1.6s ease-in-out infinite;
+}
+.system-eq-pill.is-drift {
+	background: rgba(217, 164, 65, 0.12);
+	border-color: #d9a441;
+	color: #d9a441;
+}
+.system-eq-pill.is-drift .dot {
+	background: #d9a441;
+	box-shadow: 0 0 6px rgba(217, 164, 65, 0.5);
+	animation: none;
+}
+.system-eq-pill-device {
+	color: inherit;
+	opacity: 0.85;
+	font-weight: 500;
+}
+.system-eq-pill-device:not([hidden])::before {
+	content: " · ";
+	color: var(--color-text-3);
+	margin-right: 2px;
+}
+@keyframes system-eq-breath {
+	0%, 100% {
+		transform: scale(1);
+		opacity: 0.85;
+	}
+	50% {
+		transform: scale(1.18);
+		opacity: 1;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.system-eq-pill .dot {
+		animation: none !important;
+	}
+}
+
+/* System EQ popover — anchored beneath the pill via JS positioning. Sits at
+   z-index 50 so it floats over the canvas and sidebar without touching the
+   dialog stack. Same surface-2 elevation as other popovers. */
+.system-eq-popover {
+	position: fixed;
+	background: var(--color-surface-2);
+	border: 1px solid var(--color-border-strong);
+	border-radius: 8px;
+	padding: 14px 16px;
+	width: 280px;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	z-index: 50;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+	color: var(--color-text-1);
+	font-size: 12px;
+}
+.system-eq-popover[hidden] {
+	display: none;
+}
+.system-eq-popover-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+.system-eq-popover-title {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--color-text-1);
+}
+.system-eq-popover-desc {
+	font-size: 11px;
+	color: var(--color-text-3);
+	line-height: 1.45;
+	margin: 0;
+}
+.system-eq-popover-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.system-eq-popover-label {
+	font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+	font-size: 9px;
+	letter-spacing: 0.2em;
+	text-transform: uppercase;
+	color: var(--color-text-3);
+	min-width: 56px;
+}
+.system-eq-popover-select {
+	flex: 1;
+	background: var(--color-surface-3);
+	border: 1px solid var(--color-border);
+	border-radius: 4px;
+	color: var(--color-text-1);
+	padding: 4px 8px;
+	font-size: 12px;
+	min-width: 0;
+}
+.system-eq-popover-select:focus-visible {
+	outline: 2px solid var(--color-accent);
+	outline-offset: -1px;
+	border-color: var(--color-accent);
+}
+.system-eq-popover-slider {
+	flex: 1;
+	accent-color: var(--color-accent);
+}
+.system-eq-popover-hint {
+	font-size: 11px;
+	color: var(--color-text-3);
+	margin: 0;
+}
+.system-eq-popover-advanced {
+	border-top: 1px solid var(--color-border);
+	padding-top: 10px;
+	margin-top: 2px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+.system-eq-popover-advanced > summary {
+	cursor: pointer;
+	font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+	font-size: 9px;
+	letter-spacing: 0.2em;
+	text-transform: uppercase;
+	color: var(--color-text-3);
+	user-select: none;
+	list-style: none;
+}
+.system-eq-popover-advanced > summary::-webkit-details-marker {
+	display: none;
+}
+.system-eq-popover-advanced > summary::before {
+	content: "▸ ";
+	display: inline-block;
+	transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.system-eq-popover-advanced[open] > summary::before {
+	transform: rotate(90deg);
+}
+
+/* Double-EQ warning chip — sits inside the popover when active. Quieter
+   than .chip-error since it's advisory, not failure. */
+.chip-double-eq {
+	font-size: 11px;
+	letter-spacing: 0.02em;
+	color: #d9a441;
+	background: rgba(217, 164, 65, 0.08);
+	border: 1px solid rgba(217, 164, 65, 0.32);
+	border-radius: 4px;
+	padding: 6px 8px;
+	line-height: 1.4;
+}
+.chip-double-eq[hidden] {
+	display: none;
+}
+
 input[type="range"][orient="vertical"] {
 	writing-mode: bt-lr;
 	-webkit-appearance: slider-vertical;

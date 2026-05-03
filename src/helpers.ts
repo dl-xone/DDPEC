@@ -1,5 +1,5 @@
-import { setDeviceGlobalGain } from "./dsp.ts";
 import { typeHasGain } from "./dsp/biquad.ts";
+import { setDeviceGlobalGain } from "./dsp.ts";
 import type { Band } from "./main.ts";
 
 /**
@@ -25,7 +25,9 @@ let _logTrayLatest: HTMLElement | null | undefined;
 function getLogTrayLatest(): HTMLElement | null {
 	if (typeof document === "undefined") return null;
 	if (_logTrayLatest && _logTrayLatest.isConnected) return _logTrayLatest;
-	_logTrayLatest = document.getElementById("logTrayLatest") as HTMLElement | null;
+	_logTrayLatest = document.getElementById(
+		"logTrayLatest",
+	) as HTMLElement | null;
 	return _logTrayLatest;
 }
 
@@ -176,7 +178,10 @@ export const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * a user gain parameter, and `computeBiquad` doesn't read `band.gain`
  * for them. Excluding them keeps the math matched to what the DSP hears.
  */
-export function computeClippingHeadroom(bands: Band[], globalGain: number): number {
+export function computeClippingHeadroom(
+	bands: Band[],
+	globalGain: number,
+): number {
 	let sum = 0;
 	for (const b of bands) {
 		if (!b.enabled) continue;

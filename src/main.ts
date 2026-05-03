@@ -1,4 +1,5 @@
 import "./style.css";
+import { initEmptyStateCard } from "./emptyStateCard.ts";
 import {
 	handleFlashClick,
 	handleSyncClick,
@@ -13,13 +14,13 @@ import {
 	toggleEqBypass,
 	undoAction,
 } from "./fn.ts";
-import { initTheme } from "./theme.ts";
 import { setGlobalGain } from "./helpers.ts";
 import { importProfile } from "./importExport.ts";
-import { initEmptyStateCard } from "./emptyStateCard.ts";
 import { selectBandByPosition } from "./peq.ts";
 import { getActiveSlot } from "./state.ts";
 import * as systemEqModule from "./systemEq.ts";
+import { initSystemEqUi } from "./systemEqUi.ts";
+import { initTheme } from "./theme.ts";
 
 // Polite live region — screen readers announce band selections + edits
 // without stealing focus from the canvas. Single node, reused; updates
@@ -46,9 +47,14 @@ function announceBandSelection(
 	gain: number,
 ): void {
 	const slot = getActiveSlot();
-	const freqLabel = freq >= 1000 ? `${(freq / 1000).toFixed(1)} kilohertz` : `${Math.round(freq)} hertz`;
+	const freqLabel =
+		freq >= 1000
+			? `${(freq / 1000).toFixed(1)} kilohertz`
+			: `${Math.round(freq)} hertz`;
 	const gainLabel =
-		gain === 0 ? "0 decibels" : `${gain > 0 ? "+" : ""}${gain.toFixed(1)} decibels`;
+		gain === 0
+			? "0 decibels"
+			: `${gain > 0 ? "+" : ""}${gain.toFixed(1)} decibels`;
 	const text = `Slot ${slot}, band ${bandIndex + 1}, ${freqLabel}, ${gainLabel}`;
 	announcePending = text;
 	const node = ensureAnnouncer();
@@ -94,6 +100,7 @@ initEmptyStateCard();
 //   await window.ddpecSystemEq.engageSystemEq()
 //   await window.ddpecSystemEq.disengageSystemEq()
 systemEqModule.initSystemEqListeners();
+initSystemEqUi();
 (window as unknown as { ddpecSystemEq?: typeof systemEqModule }).ddpecSystemEq =
 	systemEqModule;
 
@@ -120,18 +127,16 @@ async function callFnHandler(name: string, fallbackMessage: string) {
 /**
  * CONNECTION LOGIC
  */
-document
-	.getElementById("btnConnect")
-	?.addEventListener("click", async () => {
-		// Tier 3 #3 — branch on the current primary-action state set by
-		// paintSmartPrimary. The dataset attribute is the source of truth
-		// so the button's visible label matches the action that fires.
-		const btn = document.getElementById("btnConnect") as HTMLButtonElement | null;
-		const action = btn?.dataset.primaryAction ?? "connect";
-		if (action === "sync") await handleSyncClick();
-		else if (action === "flash") await handleFlashClick();
-		else await toggleConnection();
-	});
+document.getElementById("btnConnect")?.addEventListener("click", async () => {
+	// Tier 3 #3 — branch on the current primary-action state set by
+	// paintSmartPrimary. The dataset attribute is the source of truth
+	// so the button's visible label matches the action that fires.
+	const btn = document.getElementById("btnConnect") as HTMLButtonElement | null;
+	const action = btn?.dataset.primaryAction ?? "connect";
+	if (action === "sync") await handleSyncClick();
+	else if (action === "flash") await handleFlashClick();
+	else await toggleConnection();
+});
 
 /**
  * SYNC LOGIC — wrapper adds progress modal + inert guard + errorModal.
@@ -170,7 +175,9 @@ document
  */
 const btnImport = document.getElementById("btnImport");
 const btnImportJson = document.getElementById("btnImportJson");
-const fileInput = document.getElementById("fileInput") as HTMLInputElement | null;
+const fileInput = document.getElementById(
+	"fileInput",
+) as HTMLInputElement | null;
 btnImport?.addEventListener("click", () => fileInput?.click());
 // JDS pivot 2026-04-17: visible entry point in the preset sidebar.
 btnImportJson?.addEventListener("click", () => fileInput?.click());
@@ -198,7 +205,10 @@ document
 document
 	.getElementById("btnSaveAsNew")
 	?.addEventListener("click", () =>
-		callFnHandler("handleSaveAsNew", "Save as new preset: not implemented yet."),
+		callFnHandler(
+			"handleSaveAsNew",
+			"Save as new preset: not implemented yet.",
+		),
 	);
 document
 	.getElementById("btnGetLink")
@@ -257,7 +267,12 @@ window.addEventListener("keydown", (e) => {
 	// guard so the palette opens even when focus is inside a text input
 	// (matches VS Code / Linear / Notion behaviour). The palette itself
 	// handles Esc to close, so we don't add a global Esc handler here.
-	if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k" && !e.shiftKey && !e.altKey) {
+	if (
+		(e.metaKey || e.ctrlKey) &&
+		e.key.toLowerCase() === "k" &&
+		!e.shiftKey &&
+		!e.altKey
+	) {
 		e.preventDefault();
 		openPalette();
 		return;
@@ -278,8 +293,13 @@ window.addEventListener("keydown", (e) => {
 	// Band 1, digit 0 grabs Band 10. Focuses the canvas so subsequent
 	// arrow keys arrow-edit the just-selected band without a Tab.
 	if (
-		!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
-		e.key.length === 1 && e.key >= "0" && e.key <= "9"
+		!e.ctrlKey &&
+		!e.metaKey &&
+		!e.altKey &&
+		!e.shiftKey &&
+		e.key.length === 1 &&
+		e.key >= "0" &&
+		e.key <= "9"
 	) {
 		const pos = e.key === "0" ? 9 : Number(e.key) - 1;
 		const band = selectBandByPosition(pos);

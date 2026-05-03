@@ -23,7 +23,7 @@ interface AppState {
 	activeSlot: SlotName;
 }
 
-let state: AppState = {
+const state: AppState = {
 	device: null,
 	config: null,
 	slotId: 101,
@@ -37,7 +37,7 @@ let state: AppState = {
 // Wave 4.10: per-slot "unsaved changes since last sync" flag. A and B track
 // independently so a user who flashes A then edits B can switch back to A
 // without a spurious prompt.
-let dirty: Record<SlotName, boolean> = { A: false, B: false };
+const dirty: Record<SlotName, boolean> = { A: false, B: false };
 
 // JDS pivot 2026-04-17: emit `ddpec:dirty-change` whenever dirty flips so UI
 // observers (commit bar visibility, preset-changed chip) can react without
