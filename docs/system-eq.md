@@ -296,6 +296,33 @@ plugin, tray glyph state machine), `index.html` (tooltip).
 **Verification you do:** subjective — does it feel slick? Where does it still
 feel off? This phase is iterative; expect a feedback round.
 
+### Phase 7 — QA pass (~½ day)
+
+Catch issues introduced during implementation, verify nothing existing broke,
+document what I cannot verify so the user knows where to test.
+
+**Automated checks I run:**
+
+- `npm test` — all existing + new tests pass.
+- `npm run build` — TypeScript compiles, Vite produces a clean bundle.
+- `npm run format` — Biome lints clean.
+
+**Self-review pass on every new file:** dead code, missing edge cases,
+inconsistent naming, leftover debug toggles, unhandled async rejections.
+
+**Cross-cut audit:**
+
+- All new state fields persist correctly across reload.
+- System EQ on/off is checked consistently everywhere it matters
+  (no double-EQ writes, no orphaned audio nodes after disengage).
+- Wizard state machine has no unreachable / dead-end states.
+- Drift detection doesn't false-positive on legitimate setups.
+- Audio-reactive subscribers all clean up on unmount.
+
+**Manual-verification checklist for the user.** A specific list of things to
+listen for / click on / sleep through, organized by phase, so the user knows
+exactly what they're verifying when. Lives at the bottom of this doc.
+
 ---
 
 ## Risks
