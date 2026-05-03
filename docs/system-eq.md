@@ -235,6 +235,67 @@ without the Tauri shell.
 - Tray icon pulse polish.
 - Double-EQ detection (compare dongle's current coefficients to flat; raise chip).
 
+### Phase 6 — Flair & nice touches (~½–1 day)
+
+The "really really nice to use" pass. Restraint over feature count — every item
+on this list earns its keep by removing a friction or making the product feel
+unmistakably crafted. Design principle stays the same: nothing dances unless
+audio is moving, every animation quiets within 150ms, single accent color.
+
+**Motion & physics**
+
+- Cross-fade on output switching: gain-duck → swap sink → unduck, ~80ms each
+  side. Device changes never pop or click.
+- 180ms slide+fade for menubar dropdown enter/exit. Main window respects the
+  same vocabulary.
+- All transitions use ease-out cubic. No springs, no bounces.
+
+**Native macOS feel**
+
+- NSVisualEffectView vibrancy on the dropdown panel via Tauri's
+  `transparent + vibrancy` window config. Sits naturally on whatever's behind it.
+- Native traffic lights and a proper draggable title region on the main window.
+- Respect `prefers-reduced-motion` — disables band glow, level strip, tray
+  pulse. Functionality unchanged.
+- Optional opt-in to macOS accent color override (if set, replaces `#cf4863`).
+
+**Personality**
+
+- Tray glyph shifts by state: `●` active, `◌` bypassed, `⚠` drift, `◐` engaging.
+- Status pill hover tooltip summarizes current source / output / preset /
+  pre-amp. No click required for the at-a-glance state.
+- Toast copy is specific — "Synced to AKLite — 5 bands updated", never generic
+  "Saved!". Reads like a person wrote it.
+- First successful engage plays a level-matched 1s confirmation tone through
+  the System EQ chain. Subtle proof the wiring works, never repeats unless the
+  user re-runs the wizard.
+
+**Power-user touches**
+
+- Global hotkey for System EQ on/off (default Cmd+Shift+E) via
+  `tauri-plugin-global-shortcut`. Configurable in Device Settings.
+- Quick output switcher entry in the existing command palette
+  (`src/commandPalette.ts`).
+- Existing `src/haptic.ts` wired into toggle, preset switch, and slider snap
+  events on devices that support it.
+
+**Smart defaults**
+
+- Output auto-pick priority on first engage: connected USB DAC → last-used →
+  system default. User never sees a "pick an output" empty state on first run.
+- Pre-engagement drift check: if BlackHole isn't currently receiving audio
+  (silent input stream for >500ms after engage), surface the routing-fix pill
+  *before* the user toggles into silence and wonders what broke.
+
+**Files touched:** `src/systemEq.ts` (cross-fade, drift check, smart output
+default), `src/style.css` (vibrancy, motion vocabulary), `src/main.ts`
+(haptic + toast wiring, hotkey registration), `src/commandPalette.ts`
+(output switcher entry), `src-tauri/` (vibrancy config, global shortcut
+plugin, tray glyph state machine), `index.html` (tooltip).
+
+**Verification you do:** subjective — does it feel slick? Where does it still
+feel off? This phase is iterative; expect a feedback round.
+
 ---
 
 ## Risks
