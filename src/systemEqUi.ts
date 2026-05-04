@@ -62,6 +62,7 @@ let doubleEqChipEl: HTMLElement | null = null;
 let inputHintEl: HTMLElement | null = null;
 let outputHintEl: HTMLElement | null = null;
 let levelStripEl: HTMLElement | null = null;
+let popoverVuEl: HTMLElement | null = null;
 let autoStartSwitchEl: HTMLInputElement | null = null;
 let wizardBtnEl: HTMLButtonElement | null = null;
 
@@ -92,6 +93,7 @@ export function initSystemEqUi(): void {
 	inputHintEl = document.getElementById("systemEqInputHint");
 	outputHintEl = document.getElementById("systemEqOutputHint");
 	levelStripEl = document.getElementById("systemEqLevelStrip");
+	popoverVuEl = document.getElementById("systemEqPopoverVu");
 	autoStartSwitchEl = document.getElementById(
 		"systemEqAutoStartSwitch",
 	) as HTMLInputElement | null;
@@ -262,6 +264,20 @@ function onLatencyChange(): void {
 	if (latencyLabelEl) latencyLabelEl.textContent = LATENCY_LABELS[latency];
 }
 
+function composePillTooltip(state: ReturnType<typeof getSystemEqState>): string {
+	const lines: string[] = [];
+	lines.push(state.active ? "System EQ — running" : "System EQ — off");
+	const inputName =
+		state.inputDeviceId && deviceLabels.get(state.inputDeviceId);
+	const outputName =
+		state.outputDeviceId && deviceLabels.get(state.outputDeviceId);
+	if (inputName) lines.push(`Source: ${inputName}`);
+	if (outputName) lines.push(`Output: ${outputName}`);
+	else lines.push("Output: system default");
+	lines.push(`Latency: ${LATENCY_LABELS[state.latency]}`);
+	return lines.join("\n");
+}
+
 function refreshUi(): void {
 	const state = getSystemEqState();
 
@@ -271,6 +287,10 @@ function refreshUi(): void {
 		pillEl.classList.toggle("is-active", state.active);
 		pillEl.setAttribute("aria-pressed", String(state.active));
 		pillEl.setAttribute("data-state", state.active ? "on" : "off");
+		// Live tooltip — shows full state summary on hover so the user can
+		// see source / output / latency at a glance without clicking.
+		// Browsers render this as a native title tooltip after ~700ms hover.
+		pillEl.title = composePillTooltip(state);
 	}
 
 	if (pillDeviceLabelEl) {
@@ -384,14 +404,14 @@ function rebuildSelect(
 	}
 }
 
-// Drive the header level strip from the audioReactive tick stream. The
-// strip's --system-eq-level CSS variable maps to opacity in style.css; we
-// also smooth the perceived loudness with a square-root so quiet music
-// still produces a visible signal.
+// Drive the header level strip — and the popover's in-panel mini-VU —
+// from the audioReactive tick stream. Both surfaces use sqrt(RMS) for
+// perceptual scaling so quiet music still produces a visible signal.
 function updateLevelStrip(): void {
-	if (!levelStripEl) return;
 	if (isAudioReactiveSilent()) {
-		levelStripEl.style.setProperty("--system-eq-level", "0");
+		levelStripEl?.style.setProperty("--system-eq-level", "0");
+		popoverVuEl?.style.setProperty("--system-eq-popover-opacity", "0");
+		popoverVuEl?.style.setProperty("--system-eq-popover-level", "0");
 		return;
 	}
 	const rms = getRms();
@@ -399,7 +419,15 @@ function updateLevelStrip(): void {
 	// Cap at 0.85 so the strip never quite reaches opaque — keeps it
 	// reading as a glow rather than a blocky bar.
 	const intensity = Math.min(0.85, Math.sqrt(rms));
-	levelStripEl.style.setProperty("--system-eq-level", intensity.toFixed(3));
+	levelStripEl?.style.setProperty("--system-eq-level", intensity.toFixed(3));
+	// In-popover mini-VU. Scales the pre-rendered gradient bar so it grows
+	// from the left edge with the audio — feels like a tiny meter rather
+	// than a bar that flickers in opacity.
+	popoverVuEl?.style.setProperty("--system-eq-popover-opacity", "1");
+	popoverVuEl?.style.setProperty(
+		"--system-eq-popover-level",
+		intensity.toFixed(3),
+	);
 }
 
 // Command palette entries — let users drive System EQ from Cmd+K without

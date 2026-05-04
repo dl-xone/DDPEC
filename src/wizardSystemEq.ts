@@ -171,12 +171,13 @@ export function openSystemEqWizard(): void {
 				// without revisiting.
 				if (state.pickedInput) setSystemEqInput(state.pickedInput);
 				if (state.pickedOutput) void setSystemEqOutput(state.pickedOutput);
-				toast("System EQ ready");
-				// Brief 500 Hz tone so the user hears the routing work end-to-
-				// end. Runs only on wizard completion; subsequent engages stay
-				// silent. Fire-and-forget — we don't block dialog dismissal
-				// on tone playback.
-				void playConfirmationTone();
+				toast("System EQ ready · listen for the tone");
+				// Brief 500 Hz tone routed *directly* to the picked output via
+				// setSinkId so it bypasses the BlackHole loop the user just
+				// configured. The wizard's whole point was to set up that
+				// routing; we shouldn't lose the confirmation tone to the
+				// same plumbing. Fire-and-forget; don't block dismissal.
+				void playConfirmationTone(state.pickedOutput);
 				close(true);
 			}
 		});
@@ -434,12 +435,55 @@ async function detectBlackHole(): Promise<boolean> {
 	return devices.some((d) => /blackhole/i.test(d.label || ""));
 }
 
+// Heuristic: a user counts as "existing DDPEC user" if they already have
+// any non-System-EQ ddpec.* keys in localStorage (presets, theme,
+// connection state, etc.). For those users, the wizard never auto-opens
+// — they get a "Run wizard…" button in Device Settings instead. New
+// users (empty storage) get the auto-show.
+//
+// Without this guard, every existing DDPEC user gets a surprise modal on
+// the first reload after this feature ships. That's the worst kind of
+// UX: a tool you've used for months suddenly demanding setup.
+function looksLikeExistingDdpecUser(): boolean {
+	if (typeof localStorage === "undefined") return false;
+	const ownKeys = new Set([
+		"ddpec.systemEq",
+		"ddpec.systemEq.wizardCompleted",
+		"ddpec.systemEq.wizardDeferred",
+		"ddpec.systemEq.autoStart",
+	]);
+	try {
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i);
+			if (!k) continue;
+			if (k.startsWith("ddpec.") && !ownKeys.has(k)) return true;
+		}
+	} catch {
+		// Storage access denied — fall through to "treat as fresh" so the
+		// auto-show still has a chance for genuinely new users.
+	}
+	return false;
+}
+
 // Show the wizard automatically on first launch — call from main.ts after
-// the rest of the app is up. Skips if completed or explicitly deferred.
+// the rest of the app is up. Skips if completed, explicitly deferred,
+// or if we detect existing DDPEC usage.
 export function maybeShowWizardOnFirstRun(): void {
 	if (typeof window === "undefined") return;
 	if (isWizardCompleted()) return;
 	if (isWizardDeferred()) return;
+	if (looksLikeExistingDdpecUser()) {
+		// Mark as deferred so we don't keep checking; user can still launch
+		// from Device Settings → System EQ → Run wizard.
+		if (typeof localStorage !== "undefined") {
+			try {
+				localStorage.setItem("ddpec.systemEq.wizardDeferred", "1");
+			} catch {
+				// ignore
+			}
+		}
+		return;
+	}
 	// Defer to the next animation frame so we don't block first paint.
 	requestAnimationFrame(() => {
 		// Don't auto-open if a modal/dialog is already up (e.g. AutoEQ in

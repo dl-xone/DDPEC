@@ -137,14 +137,29 @@ export async function initTauriBridge(): Promise<void> {
 
 		// Expose the autostart plugin so systemEqUi.ts can flip the login
 		// item without re-importing @tauri-apps/* (and without making
-		// systemEqUi.ts Tauri-aware).
+		// systemEqUi.ts Tauri-aware). The plugin's published API has
+		// shifted between releases — sometimes named exports, sometimes
+		// behind a default — so we coalesce both shapes.
 		try {
-			const autostart = (await import(
+			const mod = (await import(
 				/* @vite-ignore */ "@tauri-apps/plugin-autostart" as string
-			)) as AutoStartPlugin;
-			(
-				window as unknown as { ddpecTauriAutoStart: AutoStartPlugin }
-			).ddpecTauriAutoStart = autostart;
+			)) as Partial<AutoStartPlugin> & {
+				default?: Partial<AutoStartPlugin>;
+			};
+			const candidate: Partial<AutoStartPlugin> = mod.default ?? mod;
+			if (
+				typeof candidate.enable === "function" &&
+				typeof candidate.disable === "function" &&
+				typeof candidate.isEnabled === "function"
+			) {
+				(
+					window as unknown as { ddpecTauriAutoStart: AutoStartPlugin }
+				).ddpecTauriAutoStart = candidate as AutoStartPlugin;
+			} else {
+				log(
+					"Tauri autostart plugin loaded but missing expected API shape; auto-start disabled.",
+				);
+			}
 		} catch (err) {
 			log(`Tauri autostart plugin missing (${(err as Error).message})`);
 		}
