@@ -10,7 +10,7 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WindowEvent,
+    AppHandle, Emitter, Manager, WindowEvent,
 };
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
@@ -136,7 +136,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 mod commands {
-    use tauri::{AppHandle, Manager};
+    use tauri::{AppHandle, Emitter, Manager};
 
     #[tauri::command]
     pub fn open_main_window(app: AppHandle) -> Result<(), String> {
