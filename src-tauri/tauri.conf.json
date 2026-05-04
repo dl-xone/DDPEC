@@ -63,9 +63,6 @@
   "plugins": {
     "shell": {
       "open": true
-    },
-    "autostart": {
-      "macosLauncher": "AppleScript"
     }
   }
 }
